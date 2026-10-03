@@ -1,12 +1,15 @@
-// Internal normalized model; this is not the QueryTube API or export schema.
-export interface YouTubeSearchResult {
+// Only the data needed by the future import workflow, independent of API DTOs.
+export interface ImportVideo {
   readonly videoId: string;
   readonly title: string;
   readonly url: string;
 }
 
-export interface SearchRun {
-  readonly id: string;
-  readonly query: string;
-  readonly results: readonly YouTubeSearchResult[];
+export interface SearchRunReference {
+  readonly userId: string;
+  readonly searchRunId: string;
+}
+
+export interface ImportSource extends SearchRunReference {
+  readonly videos: readonly ImportVideo[];
 }

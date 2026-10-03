@@ -4,6 +4,9 @@
   "private": true,
   "description": "A local-first tool for importing selected QueryTube YouTube results into NotebookLM.",
   "type": "module",
+  "bin": {
+    "nlyt": "dist/cli/index.js"
+  },
   "engines": {
     "node": "^22.13.0 || >=24"
   },
