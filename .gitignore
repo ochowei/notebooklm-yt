@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Local configuration, imports, and future NotebookLM session data
+.env
+.env.*
+!.env.example
+.local/
+.notebooklm/
