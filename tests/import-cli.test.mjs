@@ -70,7 +70,7 @@ for (const [mode, status, exit, succeeded] of [
       }
       if (json) {
         const payload = JSON.parse(result.stdout);
-        assert.deepEqual(Object.keys(payload), ['status', 'importId', 'createdAt', 'userId', 'searchRunId', 'notebook', 'sources', 'errors']);
+        assert.deepEqual(Object.keys(payload), ['status', 'importId', 'createdAt', 'userId', 'searchRunId', 'notebook', 'sources', 'errors', 'skipped']);
         assert.equal(payload.status, status);
         assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
         assert.equal(new Date(payload.createdAt).toISOString(), payload.createdAt);
@@ -78,7 +78,7 @@ for (const [mode, status, exit, succeeded] of [
         assert.equal(payload.userId, 'user-1');
         assert.equal(payload.searchRunId, 'run-1');
         assert.deepEqual(payload.notebook, { title, created: true, id: 'nb-1' });
-        assert.deepEqual(payload.sources, { attempted: 3, succeeded, failed: 3 - succeeded });
+        assert.deepEqual(payload.sources, { total: 3, selected: 3, attempted: 3, succeeded, failed: 3 - succeeded, skipped: 0 });
         assert.equal(payload.errors.length, 3 - succeeded);
         for (const error of payload.errors) {
           assert.equal(error.code, 'NOTEBOOKLM_BACKEND_ERROR');
@@ -88,7 +88,7 @@ for (const [mode, status, exit, succeeded] of [
         if (mode === 'partial') assert.equal(payload.errors[0].source.videoId, 'b');
       } else {
         for (const text of ['Import\n- id: ' + title.slice(-12, -1), '- created: ', 'Search Run\n- user: user-1\n- run: run-1', 'Notebook', '- created: yes',
-          '- id: nb-1', `Sources\n- attempted: 3\n- succeeded: ${succeeded}\n- failed: ${3 - succeeded}`,
+          '- id: nb-1', `Sources\n- total: 3\n- selected: 3\n- attempted: 3\n- succeeded: ${succeeded}\n- failed: ${3 - succeeded}`,
           `Result\n- ${status.replace('_', ' ')}`]) assert.ok(result.stdout.includes(text));
       }
     });
@@ -133,7 +133,7 @@ for (const [overrides, code, callCount] of [
         }
         assert.equal(payload.notebook.created, false);
         assert.equal(payload.notebook.id, null);
-        assert.deepEqual(payload.sources, { attempted: 0, succeeded: 0, failed: 0 });
+        assert.deepEqual(payload.sources, { total: 0, selected: 0, attempted: 0, succeeded: 0, failed: 0, skipped: 0 });
       } else {
         assert.equal(result.stdout, '');
         assert.ok(result.stderr.includes(code));
@@ -179,5 +179,68 @@ test('presentation suppresses even ClientError messages and unknown errors', () 
     const report = importReport({}, undefined, error);
     assert.doesNotMatch(JSON.stringify(report), /secret|cookie|token|traceback/);
     assert.deepEqual(report.errors, [{ code: error instanceof ClientError ? error.code : 'INTERNAL_ERROR' }]);
+  }
+});
+
+for (const [mode, videoIds, status, exit, succeeded, failed] of [
+  ['', ['c', 'a', 'c'], 'success', 0, 2, 0],
+  ['partial', ['b', 'a'], 'partial_failure', 2, 1, 1],
+  ['all', ['c', 'a'], 'failure', 1, 0, 2],
+]) {
+  for (const json of [false, true]) {
+    test(`CLI selected ${status} ${json ? 'JSON' : 'human'} includes skipped sources`, t => {
+      const { run, calls } = fixture(t);
+      const result = run([...args, ...videoIds.flatMap(id => ['--video', id]), ...(json ? ['--json'] : [])],
+        { NLYT_TEST_BACKEND: mode });
+      assert.equal(result.status, exit);
+      assert.equal(result.stderr, '');
+      const selected = mode === 'partial' ? ['a', 'b'] : ['a', 'c'];
+      assert.equal(calls().length, 3, 'one create and two adds, no retry or rollback');
+      assert.deepEqual(calls().slice(1).map(call => call.at(-1)), selected.map(id => `https://www.youtube.com/watch?v=${id}`));
+      const skippedId = mode === 'partial' ? 'c' : 'b';
+      if (json) {
+        const payload = JSON.parse(result.stdout);
+        assert.equal(payload.status, status);
+        assert.deepEqual(payload.sources, { total: 3, selected: 2, attempted: 2, succeeded, failed, skipped: 1 });
+        assert.deepEqual(payload.skipped, [{ reason: 'not_selected', source: {
+          videoId: skippedId, title: skippedId, url: `https://www.youtube.com/watch?v=${skippedId}`,
+        } }]);
+        assert.equal(payload.errors.length, failed);
+        assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
+        assert.equal(new Date(payload.createdAt).toISOString(), payload.createdAt);
+        assert.equal(payload.notebook.created, true);
+        assert.ok(payload.notebook.title.endsWith(`[${payload.importId}]`));
+      } else {
+        for (const text of ['- total: 3', '- selected: 2', '- attempted: 2', `- succeeded: ${succeeded}`,
+          `- failed: ${failed}`, '- skipped: 1', `- skipped: not_selected (video: ${skippedId})`,
+          `- ${status.replace('_', ' ')}`]) assert.ok(result.stdout.includes(text));
+        if (failed) assert.ok(result.stdout.includes('NOTEBOOKLM_BACKEND_ERROR'));
+      }
+    });
+  }
+}
+
+for (const json of [false, true]) {
+  test(`CLI unknown selection ${json ? 'JSON' : 'human'} creates no notebook`, t => {
+    const { run, calls } = fixture(t);
+    const result = run([...args, '--video=unknown', ...(json ? ['--json'] : [])]);
+    assert.equal(result.status, 1);
+    assert.deepEqual(calls(), []);
+    if (json) {
+      const payload = JSON.parse(result.stdout);
+      assert.deepEqual(payload.errors, [{ code: 'IMPORT_INVALID_SELECTION' }]);
+      assert.equal(payload.notebook.created, false);
+      assert.equal(payload.skipped.length, 0);
+    } else assert.ok(result.stderr.includes('IMPORT_INVALID_SELECTION'));
+  });
+}
+
+test('video equals syntax works before command; missing value and search command video option reject', t => {
+  const { run } = fixture(t);
+  assert.equal(run(['--video=c', '--video=a', ...args, '--json']).status, 0);
+  for (const command of [[...args, '--video', '--json'], ['search-runs', 'list', '--user=user-1', '--video=a', '--json']]) {
+    const result = run(command);
+    assert.equal(result.status, 1);
+    assert.ok(result.stdout.includes('CLI_INVALID_ARGUMENTS'));
   }
 });

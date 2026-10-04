@@ -13,7 +13,7 @@ const help = `notebooklm-yt
 Usage:
   nlyt search-runs list --user <userId> [--json]
   nlyt search-runs get <runId> --user <userId> [--json]
-  nlyt import search-run <runId> --user <userId> --title <notebookTitle> [--json]
+  nlyt import search-run <runId> --user <userId> --title <notebookTitle> [--video <videoId> ...] [--json]
   nlyt --help
 
 Set QUERYTUBE_BASE_URL in .env (current directory) or your environment.
@@ -33,6 +33,7 @@ try {
     options: {
       user: { type: 'string' },
       title: { type: 'string' },
+      video: { type: 'string', multiple: true },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -42,11 +43,12 @@ try {
     console.log(json ? JSON.stringify({ help }) : help);
   } else {
     const [group, command, runId] = positionals;
-    importInput = { userId: values.user, searchRunId: runId, notebookTitle: values.title };
+    importInput = { userId: values.user, searchRunId: runId, notebookTitle: values.title,
+      ...(values.video === undefined ? {} : { selection: { videoIds: values.video } }) };
     const validId = (value: string | undefined) => value?.trim() && !value.includes('\0') && value !== '.' && value !== '..';
     const importCommand = group === 'import' && command === 'search-run' && positionals.length === 3
       && validId(runId) && validId(values.user) && values.title?.trim() && !values.title.includes('\0');
-    const searchCommand = group === 'search-runs' && values.title === undefined && validId(values.user)
+    const searchCommand = group === 'search-runs' && values.video === undefined && values.title === undefined && validId(values.user)
       && ((command === 'list' && positionals.length === 2)
         || (command === 'get' && positionals.length === 3 && validId(runId)));
     if (!importCommand && !searchCommand) {
@@ -63,6 +65,7 @@ try {
     if (importCommand) {
       const result = await new ImportSearchRunToNotebook(client, new NotebookLmCliProvider()).execute({
         userId: values.user!, searchRunId: runId!, notebookTitle: values.title!,
+        ...(values.video === undefined ? {} : { selection: { videoIds: values.video } }),
       });
       const report = importReport(importInput, result);
       console.log(json ? JSON.stringify(report) : importHumanOutput(report));

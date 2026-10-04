@@ -1,25 +1,26 @@
 import { ImportSearchRunError } from '../application/import-context.js';
 import { ClientError } from '../application/errors.js';
+import { summarizeImportSources } from '../application/import-search-run-to-notebook.js';
 import type { ImportSearchRunInput, ImportSearchRunResult } from '../application/import-search-run-to-notebook.js';
 
 /** Presentation contract only; application results remain authoritative. */
 export function importReport(input: Partial<ImportSearchRunInput>, result?: ImportSearchRunResult, error?: unknown) {
   const context = error instanceof ImportSearchRunError ? error.context : undefined;
-  const attempted = result?.sources.length ?? 0;
-  const succeeded = result?.sources.filter(source => source.status === 'success').length ?? 0;
-  const failed = attempted - succeeded;
+  const { status, summary } = summarizeImportSources(result?.sources ?? []);
   return {
-    status: !result || succeeded === 0 ? 'failure' : failed ? 'partial_failure' : 'success',
+    status,
     importId: result?.importId ?? context?.importId ?? null,
     createdAt: result?.createdAt ?? context?.createdAt ?? null,
     userId: input.userId ?? null,
     searchRunId: input.searchRunId ?? null,
     notebook: { title: result?.notebook.title ?? context?.notebookTitle ?? input.notebookTitle ?? null,
       created: result !== undefined, id: result?.notebook.id ?? null },
-    sources: { attempted, succeeded, failed },
+    sources: summary,
     errors: result ? result.sources.flatMap(source => source.status === 'failure'
       ? [{ code: source.error.code, source: source.source }] : [])
       : [{ code: error instanceof ClientError ? error.code : 'INTERNAL_ERROR' }],
+    skipped: result?.sources.flatMap(source => source.status === 'skipped'
+      ? [{ reason: source.reason, source: source.source }] : []) ?? [],
   };
 }
 
@@ -34,9 +35,11 @@ export function importHumanOutput(report: ReturnType<typeof importReport>): stri
     '', 'Notebook', `- title: ${report.notebook.title ?? '(not provided)'}`,
     `- created: ${report.notebook.created ? 'yes' : 'no (not confirmed)'}`,
     ...(report.notebook.id ? [`- id: ${report.notebook.id}`] : []),
-    '', 'Sources', `- attempted: ${report.sources.attempted}`, `- succeeded: ${report.sources.succeeded}`,
-    `- failed: ${report.sources.failed}`, '', 'Result', `- ${report.status.replace('_', ' ')}`,
+    '', 'Sources', `- total: ${report.sources.total}`, `- selected: ${report.sources.selected}`,
+    `- attempted: ${report.sources.attempted}`, `- succeeded: ${report.sources.succeeded}`,
+    `- failed: ${report.sources.failed}`, `- skipped: ${report.sources.skipped}`, '', 'Result', `- ${report.status.replace('_', ' ')}`,
     ...report.errors.map(error => `- error: ${error.code}${'source' in error ? ` (video: ${error.source.videoId})` : ''}`),
+    ...report.skipped.map(item => `- skipped: ${item.reason} (video: ${item.source.videoId})`),
     ...(report.status === 'failure' ? ['Use --help for usage and configuration. Authenticate separately if NOTEBOOKLM_AUTH_REQUIRED.',
       'If a write was not confirmed, inspect the target notebook before repeating it.'] : []),
   ].join('\n');

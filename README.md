@@ -20,8 +20,8 @@ QueryTube Search Run
 
 CLI 與未來 local Web UI 呼叫同一組 application use case，並透過
 `NotebookProvider` 匯入新建的 notebook。目前提供 Search Run 讀取與
-標準化、NotebookProvider adapter，以及匯入全部 internal sources 的 application
-use case 與 CLI import workflow；影片選取尚未實作。
+標準化、NotebookProvider adapter，以及支援影片選取與 Import Report 的共用
+application use case 與非互動式 CLI import workflow。
 
 ## npm 安裝與 prerequisites
 
@@ -240,7 +240,8 @@ QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不
 兩個 dependency 都是既有 application interface；CLI 注入 infrastructure adapters，
 未來 Web UI 可重用同一 use case。
 
-輸入為 `{ userId, searchRunId, notebookTitle }`，三者在 fetch 前驗證非空、
+輸入為 `{ userId, searchRunId, notebookTitle, selection?: { videoIds: readonly string[] } }`，
+三個必要欄位在 fetch 前驗證非空、
 非純空白且不含 NUL；IDs 也不接受 `.` / `..`。無效輸入回報
 `ClientError` 的 `IMPORT_INVALID_ARGUMENTS`。驗證後建立一次 import context，
 將 user title 加上識別 suffix 後傳給 provider。
@@ -254,20 +255,37 @@ QueryTubeClient.getSearchRun(userId, searchRunId)
   → NotebookProvider.createNotebook(formatted notebookTitle)
   → sequential addYouTubeSource(notebook.id, video.url)
   → { importId, createdAt, notebook, sources }
+  → summarizeImportSources(result.sources): { status, summary }
 ```
 
-Use case 匯入所有 `ImportSource.videos`，保留該陣列順序，不另做去重、排序、
-ranking、limit 或互動選片。真實 QueryTube mapper 的既有 videoId 去重與排序
-policy 如上；若其他 port implementation 傳入 duplicates，use case 原樣逐筆匯入。
+不傳 `selection` 時維持匯入全部 `ImportSource.videos` 的既有行為。
+明確傳入 `selection.videoIds` 時只匯入那些 IDs，其餘影片回報 `skipped/not_selected`。
+selection IDs 使用 Set deterministic 去重；選取順序不影響匯入順序，始終依
+`ImportSource.videos`。不修改 input 或 Search Run，也不新增 source 去重、排序或 ranking：
+QueryTube mapper 仍負責 canonical videoId 去重／排序；其他 port 傳入的 source duplicates
+仍依原陣列處理，與既有行為一致。
+
+明確空 selection 在 fetch/create 前回 `IMPORT_NO_SELECTED_SOURCES`。
+selection 不是 string array，或包含任一 Search Run 中不存在的 ID，回
+`IMPORT_INVALID_SELECTION`；未知 ID 不會 silent ignore，不會建立 notebook 或新增 source。
+ID 以原值精確比對，不 trim 或另加 YouTube ID 格式限制。
 
 結果為 `{ importId: string, createdAt: string, notebook: Notebook, sources: readonly ImportSourceResult[] }`；
 每筆包含原始 internal `source: ImportVideo` 與 `status`：
 
 - `success`：包含 `notebookSource: NotebookSource`。
+- `skipped`：包含 stable `reason: "not_selected"`，未呼叫 provider。
 - `failure`：只包含 `error: { code: ClientErrorCode }`，沿用 `ClientError.code`；
   非 `ClientError` 使用 `INTERNAL_ERROR`，不暴露 message、stack 或 backend diagnostics。
 
-Fetch / create 失敗以 `ImportSearchRunError` reject，保留原錯誤於 `cause`、
+Application 的純函式 `summarizeImportSources(result.sources)` 是共用報告語意：
+`{ status, summary: { total, selected, attempted, succeeded, failed, skipped } }`。
+`total` 為完整來源數，`selected = attempted = succeeded + failed`（流程逐一嘗試所有選取來源），
+`skipped` 為未選取來源數，`total = attempted + skipped`。
+status 只依成功／失敗的選取來源決定，skipped 不造成 partial failure。
+CLI 消費此函式與 application results，不自行選片或重算 business rules。
+
+Selection validation / fetch / create 失敗以 `ImportSearchRunError` reject，保留原錯誤於 `cause`、
 既有 stable code，以及本次 `context`（含 formatted title）；空 `videos` 在 create 前以
 `IMPORT_NO_SOURCES` reject，不建立空 notebook。Create 成功後逐片 sequentially
 await；單片失敗記錄後繼續，即使全部失敗仍回傳已建立的 notebook 與全部 failure。
@@ -280,7 +298,6 @@ application/domain architecture boundary。自動測試使用 fakes，不做外�
 
 ## 尚未完成
 
-- 影片選取與 presentation 匯入報告。
 - 完整 local Web UI。
 
 本階段不實作 Cloud Run deployment、多使用者 authentication 或完整
@@ -291,6 +308,8 @@ NotebookLM workflow，也未引入 DDD framework 或 DI container。
 ```sh
 nlyt import search-run RUN_ID --user USER_ID --title "nlyt import smoke"
 nlyt import search-run RUN_ID --user USER_ID --title "nlyt import smoke" --json
+# 選取指定影片（--video 可重複；不傳則匯入全部）：
+nlyt import search-run RUN_ID --user USER_ID --title "Research" --video VIDEO_A --video VIDEO_C
 # 未 npm link 時：
 node dist/cli/index.js import search-run RUN_ID --user USER_ID --title "nlyt import smoke"
 ```
@@ -304,10 +323,12 @@ NotebookLM 需要獨立安裝的 CLI 及既有 authentication session，可用
 
 Composition 為 CLI → `ImportSearchRunToNotebook(QueryTubeHttpClient,
 NotebookLmCliProvider)` → NotebookLM；fetch、create、sequential add、partial failure
-記錄仍由既有 use case 處理，沒有改變 application/domain semantics。
+記錄與 selection validation 皆由共用 use case 處理。CLI 用 Node `parseArgs` 的
+`multiple: true` 收集 `--video` values 後原樣傳入 application selection，不直接 filter。
 
 Human output 新增 Import id/created，並顯示 Search Run user/run、Notebook title/created/id、Sources
-attempted/succeeded/failed、Result 與 stable error codes，失敗 source 附 videoId。
+total/selected/attempted/succeeded/failed/skipped、Result 與 stable error codes，
+失敗 source 附 videoId；skipped sources 顯示 videoId 與 stable reason `not_selected`。
 取得 application result 時輸出 stdout；fatal failure 輸出 stderr，stdout 空。
 不輸出 backend stdout/stderr、stack、credentials 或私人 notebook list。
 
@@ -321,8 +342,9 @@ JSON 模式所有結果皆在 stdout 輸出一個 object 加換行，stderr 空�
   "userId": "USER_ID",
   "searchRunId": "RUN_ID",
   "notebook": { "title": "nlyt import smoke [04-1609] [NLYT-A83K2F]", "created": true, "id": "NOTEBOOK_ID" },
-  "sources": { "attempted": 3, "succeeded": 3, "failed": 0 },
-  "errors": []
+  "sources": { "total": 3, "selected": 2, "attempted": 2, "succeeded": 2, "failed": 0, "skipped": 1 },
+  "errors": [],
+  "skipped": [{ "reason": "not_selected", "source": { "videoId": "VIDEO_B", "title": "B", "url": "https://www.youtube.com/watch?v=VIDEO_B" } }]
 }
 ```
 
@@ -332,19 +354,22 @@ JSON 模式所有結果皆在 stdout 輸出一個 object 加換行，stderr 空�
 已知 userId/searchRunId/requested title 保留；未解析到的輸入為 `null`。
 Notebook id 未確認時為 `null`；`created: false` 表示沒有取得成功 create result，
 **不保證後端未寫入**（如 timeout/response 遺失），應人工檢查後再決定重做。
-Fatal 時 source counts 為 0。只有本次 notebook 的 ID 會顯示。
+Fatal 時 source counts 為 0、`skipped: []`，表示沒有 completed application result，
+不是對已讀取 Search Run 的來源總數判定。只有本次 notebook 的 ID 會顯示。
+JSON 原欄位意義保留；新增 `sources.total/selected/skipped` 與頂層 `skipped` 清單，
+順序依 application source order，不輸出 raw backend diagnostics 或 storage path。
 
 | Result | Exit code | 條件 |
 | --- | --- | --- |
-| `success` | `0` | 全部 source 註冊成功 |
-| `partial_failure` | `2` | 有成功 source 也有失敗 source |
-| `failure` | `1` | 無法開始、fetch/create 失敗、空 run，或全部 source 失敗 |
+| `success` | `0` | 全部 selected sources 註冊成功；未選取 skipped 不影響 |
+| `partial_failure` | `2` | selected sources 有成功也有失敗 |
+| `failure` | `1` | 無法開始、selection validation／空 selection、fetch/create 失敗、空 run，或全部 selected sources 失敗 |
 
 兩種 output mode 使用相同 exit semantics。全部 sources 失敗仍保留 notebook
 `created: true` 與 ID、完整 counts 及 failed source errors，不 rollback。
 成功代表 provider 確認 source 註冊，不保證 source processing 已 Ready。
 Import fatal error codes 重用既有 `QUERYTUBE_*`、`NOTEBOOKLM_*`、
-`IMPORT_NO_SOURCES`、`CLI_INVALID_ARGUMENTS`、`INTERNAL_ERROR`；automation 依 code
+`IMPORT_NO_SOURCES`、`IMPORT_NO_SELECTED_SOURCES`、`IMPORT_INVALID_SELECTION`、`CLI_INVALID_ARGUMENTS`、`INTERNAL_ERROR`；automation 依 code
 判斷，不依 raw backend messages。
 
 `tests/import-cli.test.mjs` 以 fake fetch 與 fixture executable 執行編譯後的正式
@@ -378,7 +403,7 @@ Use case 可選第三個 dependency `{ clock, generateId }` 供固定時間與 I
 全部 sources 失敗，以及 fetch / create fatal failure 都保留同一個 `importId` /
 `createdAt`；create request 未確認時也保留 requested formatted title，
 `created: false` / `id: null` 仍代表未確認。Fatal error 不重新產生 ID。
-CLI 的 JSON contract 只新增頂層 `importId` / `createdAt`；在 workflow 啟動前
+Import identification 階段的 JSON contract 新增頂層 `importId` / `createdAt`；在 workflow 啟動前
 失敗（如 invalid arguments、QueryTube config 或 timeout config 初始化錯誤）時，
 兩欄為 `null`。既有 status、counts、error codes、stdout/stderr 與 exit codes 不變。
 Application fatal error 現在提供帶 context 的 wrapper，原始 error 可從 `cause` 取得。

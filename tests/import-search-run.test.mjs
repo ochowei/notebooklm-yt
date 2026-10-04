@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ImportSearchRunToNotebook } from '../dist/application/import-search-run-to-notebook.js';
+import { ImportSearchRunToNotebook, summarizeImportSources } from '../dist/application/import-search-run-to-notebook.js';
 import { ClientError } from '../dist/application/errors.js';
 import { QueryTubeHttpClient } from '../dist/infrastructure/querytube/client.js';
 import { NotebookLmCliProvider } from '../dist/infrastructure/notebooklm/notebook-lm-cli-provider.js';
@@ -44,7 +44,7 @@ function fixture({ sources = videos, fetchError, createError, addErrors = [] } =
       active = false;
       const index = calls.filter(call => call[0] === 'add').length - 1;
       if (index in addErrors) throw addErrors[index];
-      return notebookSource(sources[index]);
+      return notebookSource(sources.find(source => source.url === url));
     },
     deleteNotebook: async () => assert.fail('must not delete'),
   }, dependencies);
@@ -160,4 +160,83 @@ test('actual adapters compose with mocked transport/runner and preserve existing
     ['create', '--json', '--', notebook.title],
     ...videos.map(source => ['source', 'add', '--notebook', notebook.id, '--type', 'youtube', '--json', '--', source.url]),
   ]);
+});
+
+const skipped = source => ({ source, status: 'skipped', reason: 'not_selected' });
+
+for (const videoIds of [['a', 'c'], ['c', 'a'], ['c', 'a', 'c', 'a']]) {
+  test(`selection ${videoIds} imports once in source order without mutating input`, async () => {
+    const before = structuredClone(videos);
+    const selection = { videoIds };
+    const selectionBefore = structuredClone(selection);
+    const { useCase, calls } = fixture();
+    const result = await useCase.execute({ ...input, selection });
+    assert.deepEqual(result, { ...metadata, notebook, sources: [success(videos[0]), skipped(videos[1]), success(videos[2])] });
+    assert.deepEqual(summarizeImportSources(result.sources), {
+      status: 'success', summary: { total: 3, selected: 2, attempted: 2, succeeded: 2, failed: 0, skipped: 1 },
+    });
+    assert.deepEqual(calls, expectedCalls([videos[0], videos[2]]));
+    assert.deepEqual(videos, before);
+    assert.deepEqual(selection, selectionBefore);
+  });
+}
+
+for (const [selection, code, fetched] of [
+  [{ videoIds: [] }, 'IMPORT_NO_SELECTED_SOURCES', false],
+  [{ videoIds: ['a', 'unknown'] }, 'IMPORT_INVALID_SELECTION', true],
+  [{ videoIds: [''] }, 'IMPORT_INVALID_SELECTION', true],
+  [null, 'IMPORT_INVALID_SELECTION', false],
+  [{}, 'IMPORT_INVALID_SELECTION', false],
+  [{ videoIds: 'a' }, 'IMPORT_INVALID_SELECTION', false],
+  [{ videoIds: [123] }, 'IMPORT_INVALID_SELECTION', false],
+]) {
+  test(`invalid selection ${JSON.stringify(selection)} fails safely before notebook creation`, async () => {
+    const { useCase, calls } = fixture();
+    await assert.rejects(useCase.execute({ ...input, selection }), error => {
+      assert.equal(error.code, code);
+      assert.deepEqual(error.context, { ...metadata, notebookTitle: notebook.title });
+      return true;
+    });
+    assert.deepEqual(calls, fetched ? [['get', input.userId, input.searchRunId]] : []);
+  });
+}
+
+for (const allFail of [false, true]) {
+  test(`selected sources ${allFail ? 'all' : 'partially'} fail with skips, without retry or rollback`, async () => {
+    const addErrors = [];
+    if (allFail) addErrors[0] = new ClientError('NOTEBOOKLM_AUTH_REQUIRED', 'secret cookie');
+    addErrors[1] = new Error('secret stderr stack /credential/path');
+    const { useCase, calls } = fixture({ addErrors });
+    const result = await useCase.execute({ ...input, selection: { videoIds: ['c', 'a'] } });
+    assert.deepEqual(result, { ...metadata, notebook, sources: [
+      allFail ? failure(videos[0], 'NOTEBOOKLM_AUTH_REQUIRED') : success(videos[0]),
+      skipped(videos[1]), failure(videos[2], 'INTERNAL_ERROR'),
+    ] });
+    assert.deepEqual(summarizeImportSources(result.sources), {
+      status: allFail ? 'failure' : 'partial_failure',
+      summary: { total: 3, selected: 2, attempted: 2, succeeded: allFail ? 0 : 1, failed: allFail ? 2 : 1, skipped: 1 },
+    });
+    assert.doesNotMatch(JSON.stringify(result), /secret|stderr|stack|credential/);
+    assert.deepEqual(calls, expectedCalls([videos[0], videos[2]]));
+  });
+}
+
+test('selection composes with real mapper dedupe and canonical order through mocked adapters', async () => {
+  const dto = detail([videos[2], videos[0], videos[1], videos[0]]);
+  const before = structuredClone(dto);
+  const queryTube = new QueryTubeHttpClient('https://querytube.test', async () => Response.json(dto));
+  const commands = [];
+  const provider = new NotebookLmCliProvider({ run: async args => {
+    commands.push(args);
+    return args[0] === 'create' ? { notebook } : { source: { id: `src-${args.at(-1).slice(-1)}` } };
+  } });
+  const result = await new ImportSearchRunToNotebook(queryTube, provider, dependencies).execute({
+    ...input, selection: { videoIds: ['c', 'a', 'a'] },
+  });
+  assert.deepEqual(result.sources, [success(videos[0]), skipped(videos[1]), success(videos[2])]);
+  assert.deepEqual(commands, [
+    ['create', '--json', '--', notebook.title],
+    ...[videos[0], videos[2]].map(source => ['source', 'add', '--notebook', notebook.id, '--type', 'youtube', '--json', '--', source.url]),
+  ]);
+  assert.deepEqual(dto, before);
 });
