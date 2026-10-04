@@ -7,6 +7,7 @@ import { NotebookLmCliProvider } from '../infrastructure/notebooklm/notebook-lm-
 import { ImportSearchRunToNotebook } from '../application/import-search-run-to-notebook.js';
 import type { ImportSearchRunInput } from '../application/import-search-run-to-notebook.js';
 import { importReport, importExitCode, importHumanOutput } from './import-output.js';
+import { createTuiDependencies } from './tui-dependencies.js';
 
 const help = `notebooklm-yt
 
@@ -85,9 +86,7 @@ try {
       const { startTui } = await import('../tui/index.js');
       await startTui({ userId: values.user!, createDependencies: () => {
         loadConfiguration();
-        const queryTube = new QueryTubeHttpClient();
-        return { queryTube, importer: { execute: input =>
-          new ImportSearchRunToNotebook(queryTube, new NotebookLmCliProvider()).execute(input) } };
+        return createTuiDependencies();
       } });
     } else {
       loadConfiguration();
