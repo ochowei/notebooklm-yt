@@ -52,8 +52,7 @@ NotebookLM authentication/session 由該 backend 管理，不屬於 npm package
 安裝流程。`nlyt` 不透過 `postinstall` 安裝 Python、`notebooklm-py` 或執行
 NotebookLM login；`nlyt --help` 不需要 backend、QueryTube 設定或登入 session。
 
-Package 目前標示 `UNLICENSED`，尚未授予開源授權；正式發布前由維護者確認
-授權政策，若採用開源授權，需更新 metadata 並補上對應 LICENSE。
+Package 採用 MIT License，完整授權條款見 [LICENSE](LICENSE)。
 
 ## 從原始碼安裝與 QueryTube v1 CLI
 

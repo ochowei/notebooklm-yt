@@ -6,7 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/ochowei/notebooklm-yt.git"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "files": [
     "dist/**/*.js"
