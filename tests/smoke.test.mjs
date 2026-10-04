@@ -15,7 +15,7 @@ test('compiled CLI starts and describes Search Run commands', () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /nlyt search-runs list --user/);
   assert.match(result.stdout, /nlyt search-runs get <runId> --user/);
-  assert.match(result.stdout, /not implemented yet/);
+  assert.match(result.stdout, /nlyt import search-run <runId>/);
   assert.equal(result.stderr, '');
 });
 
@@ -132,7 +132,7 @@ test('unreadable .env produces a clean JSON configuration error', t => {
 test('CLI rejects missing and invalid arguments in JSON mode', () => {
   for (const args of [['search-runs', 'list'], ['search-runs', 'get', '--user', 'user-1'],
     ['search-runs', 'list', 'extra', '--user', 'user-1'], ['search-runs', 'get', 'r', '--user', ''],
-    ['search-runs', 'list', '--user'], ['--unknown'], ['import']]) {
+    ['search-runs', 'list', '--user'], ['--unknown']]) {
     const result = run([...args, '--json']);
     assert.equal(result.status, 1);
     assert.equal(result.stderr, '');
@@ -147,10 +147,10 @@ test('human errors go to stderr and leave stdout empty', () => {
   assert.match(result.stderr, /not found or is not public/);
 });
 
-test('CLI rejects an import command that is not implemented', () => {
+test('CLI rejects an incomplete import command', () => {
   const result = spawnSync(process.execPath, [cliPath, 'import'], { encoding: 'utf8' });
 
   assert.ifError(result.error);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /not implemented yet/);
+  assert.match(result.stderr, /CLI_INVALID_ARGUMENTS/);
 });

@@ -6,7 +6,7 @@
 目前已實作 QueryTube Public API v1 Search Run client、runtime validation、
 最小匯入模型、`nlyt search-runs list/get`，以及以 `notebooklm-py` CLI 為 backend
 的 `NotebookLmCliProvider`，以及 Search Run → NotebookLM application use case。
-CLI import workflow 尚未實作。
+正式提供 `nlyt import search-run` CLI workflow。
 
 ## 預計 workflow
 
@@ -18,10 +18,10 @@ QueryTube Search Run
   → NotebookLM notebook 與 YouTube sources
 ```
 
-未來由 CLI 或 local Web UI 呼叫同一組 application use case，並透過
+CLI 與未來 local Web UI 呼叫同一組 application use case，並透過
 `NotebookProvider` 匯入新建的 notebook。目前提供 Search Run 讀取與
 標準化、NotebookProvider adapter，以及匯入全部 internal sources 的 application
-use case；影片選取與 CLI import workflow 尚未實作。
+use case 與 CLI import workflow；影片選取尚未實作。
 
 ## QueryTube v1 CLI
 
@@ -150,7 +150,7 @@ src/
 ├── infrastructure/
 │   ├── querytube/            # HTTP client、runtime contract DTO、mapper
 │   └── notebooklm/           # NotebookLmCliProvider、runner、config、runtime contract
-├── cli/                     # nlyt search-runs list/get 與說明
+├── cli/                     # nlyt search-runs list/get、import search-run 與結果呈現
 └── web/                     # 預留 local Web UI 與本機 server
 tests/                       # client、contract、mapper 與編譯後 CLI 測試
 ```
@@ -198,8 +198,8 @@ QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不
 
 `src/application/import-search-run-to-notebook.ts` 提供
 `new ImportSearchRunToNotebook(queryTubeClient, notebookProvider).execute(input)`。
-兩個 dependency 都是既有 application interface；composition 由未來 CLI / Web UI
-注入 infrastructure adapters，本輪沒有新增 CLI 命令。
+兩個 dependency 都是既有 application interface；CLI 注入 infrastructure adapters，
+未來 Web UI 可重用同一 use case。
 
 輸入為 `{ userId, searchRunId, notebookTitle }`，三者在 fetch 前驗證非空、
 非純空白且不含 NUL；IDs 也不接受 `.` / `..`。無效輸入回報
@@ -239,14 +239,87 @@ application/domain architecture boundary。自動測試使用 fakes，不做外�
 ## 尚未完成
 
 - 影片選取與 presentation 匯入報告。
-- 真正的 CLI 匯入命令與完整 local Web UI。
+- 完整 local Web UI。
 
 本階段不實作 Cloud Run deployment、多使用者 authentication 或完整
 NotebookLM workflow，也未引入 DDD framework 或 DI container。
 
-## 下一個最小 milestone
+## CLI Import Workflow
 
-建立 CLI Import Workflow，組裝既有 adapters 並呼叫已完成的
-`ImportSearchRunToNotebook`，處理輸入與結果呈現。Application orchestration
-與其自動測試已完成，CLI import workflow 可開始；影片選取與完整 Import Report
-仍屬後續 scope。
+```sh
+nlyt import search-run RUN_ID --user USER_ID --title "nlyt import smoke"
+nlyt import search-run RUN_ID --user USER_ID --title "nlyt import smoke" --json
+# 未 npm link 時：
+node dist/cli/index.js import search-run RUN_ID --user USER_ID --title "nlyt import smoke"
+```
+
+三個輸入皆必要，非空且不含 NUL，ID 不接受 `.` / `..`；title 原樣保留。
+CLI 自動載入 cwd `.env`，既有環境變數優先；QueryTube configuration 同上。
+NotebookLM 需要獨立安裝的 CLI 及既有 authentication session，可用
+`NOTEBOOKLM_CLI_PATH`、`NOTEBOOKLM_STORAGE_PATH`、`NOTEBOOKLM_TIMEOUT_MS` 設定，
+預設與人工登入 setup 見 [adapter README](src/infrastructure/notebooklm/README.md)。
+不會自動登入 Google。
+
+Composition 為 CLI → `ImportSearchRunToNotebook(QueryTubeHttpClient,
+NotebookLmCliProvider)` → NotebookLM；fetch、create、sequential add、partial failure
+記錄仍由既有 use case 處理，沒有改變 application/domain semantics。
+
+Human output 顯示 Search Run user/run、Notebook title/created/id、Sources
+attempted/succeeded/failed、Result 與 stable error codes，失敗 source 附 videoId。
+取得 application result 時輸出 stdout；fatal failure 輸出 stderr，stdout 空。
+不輸出 backend stdout/stderr、stack、credentials 或私人 notebook list。
+
+JSON 模式所有結果皆在 stdout 輸出一個 object 加換行，stderr 空，穩定 schema：
+
+```json
+{
+  "status": "success",
+  "userId": "USER_ID",
+  "searchRunId": "RUN_ID",
+  "notebook": { "title": "nlyt import smoke", "created": true, "id": "NOTEBOOK_ID" },
+  "sources": { "attempted": 3, "succeeded": 3, "failed": 0 },
+  "errors": []
+}
+```
+
+`status` 為 `success` / `partial_failure` / `failure`。每個 failed source 的 error
+為 `{"code":"NOTEBOOKLM_BACKEND_ERROR","source":{"videoId":"VIDEO_ID","title":"TITLE","url":"URL"}}`，
+沿用 application source result code；fatal errors 只有 `{"code":"CODE"}`。
+已知 userId/searchRunId/requested title 保留；未解析到的輸入為 `null`。
+Notebook id 未確認時為 `null`；`created: false` 表示沒有取得成功 create result，
+**不保證後端未寫入**（如 timeout/response 遺失），應人工檢查後再決定重做。
+Fatal 時 source counts 為 0。只有本次 notebook 的 ID 會顯示。
+
+| Result | Exit code | 條件 |
+| --- | --- | --- |
+| `success` | `0` | 全部 source 註冊成功 |
+| `partial_failure` | `2` | 有成功 source 也有失敗 source |
+| `failure` | `1` | 無法開始、fetch/create 失敗、空 run，或全部 source 失敗 |
+
+兩種 output mode 使用相同 exit semantics。全部 sources 失敗仍保留 notebook
+`created: true` 與 ID、完整 counts 及 failed source errors，不 rollback。
+成功代表 provider 確認 source 註冊，不保證 source processing 已 Ready。
+Import fatal error codes 重用既有 `QUERYTUBE_*`、`NOTEBOOKLM_*`、
+`IMPORT_NO_SOURCES`、`CLI_INVALID_ARGUMENTS`、`INTERNAL_ERROR`；automation 依 code
+判斷，不依 raw backend messages。
+
+`tests/import-cli.test.mjs` 以 fake fetch 與 fixture executable 執行編譯後的正式
+CLI composition，驗證 parser、required args、config/env、成功、部分/全部失敗、
+fatal errors、兩種輸出、exit codes、safe diagnostics，並確認沒有 retry/list/delete。
+所有 automated tests 不依賴 live auth 或 production services。
+
+Live validation 另行執行上述 CLI，使用真實 API、CLI executable、既有 session，
+選小型公開 run 並記錄結果；session 缺失/過期時以 `NOTEBOOKLM_AUTH_REQUIRED`
+回報，backend 未安裝以 `NOTEBOOKLM_CONFIG_INVALID` 回報，不自動登入或重試。
+影片選取、完整 Import Report 與 Web UI 仍屬後續 scope。
+
+### CLI live validation（2026-10-04）
+
+編譯後的 `dist/cli/index.js import search-run` 使用 `.env` 的真實 QueryTube
+base URL、既有 NotebookLM executable 與 session 執行一次，沒有 fake/preload
+或額外 smoke orchestration。使用者提供的公開 run
+`run_1790991576234_kb4wx`（owner `syjwlC0IclN0bxlZW7jRhQDAceW2`）匯入結果：
+`status: success`、exit `0`、stderr 空、attempted `30` / succeeded `30` / failed `0`。
+建立的 `nlyt import smoke` notebook ID 為 `28dd49bb-077e-4800-bf52-b5b9927084cd`。
+這確認 source 註冊成功，沒有額外驗證 processing Ready 或讀取私人 notebook list。
+未自動登入、retry、rollback 或 cleanup。

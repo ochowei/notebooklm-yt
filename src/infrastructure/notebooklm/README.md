@@ -34,7 +34,8 @@ Login 是獨立的人工 setup；provider 不會啟動 browser，也不讀取/�
 ## Configuration
 
 沿用現有 client 的 construction-time env pattern；沒有新增全域 config service。
-呼叫端負責載入 `.env`（目前 CLI 只組装 QueryTube，沒有新增 import command）。
+呼叫端負責載入 `.env`；`nlyt import search-run` 組裝 QueryTube client 與本 provider，
+並呼叫既有 application use case。登入仍為獨立人工 setup。
 也可傳入 runner constructor overrides；優先順序為 overrides → env → default。
 
 | Env | Default | 說明 |
@@ -111,8 +112,10 @@ UNCONFIRMED_WRITE 可能發生在 server 已寫入之後，應先人工檢查再
 limit 與 timeout kill，以及 application/domain boundary test。自動測試不連線
 NotebookLM、不讀取 auth state；fixture state 只含 `{}`。
 
-Live smoke 必須另外人工執行並使用現有 session，限建立 `nlyt provider smoke`
-與加入公開 YouTube URL；不要讀取其他 notebook 內容，也不要自動重試或 cleanup。
-沒有新增 delete、batch、import orchestration、chat 或生成操作。
+Live CLI validation 使用現有 session 與公開 Search Run，透過
+`nlyt import search-run RUN_ID --user USER_ID --title "nlyt import smoke" --json`
+走 production composition。這會建立 notebook 並匯入該 run 的全部 sources；
+建議選來源數較少的測試 run。不要讀取其他 notebook 內容，也不要自動重試或 cleanup。
+沒有新增 delete、batch、chat 或生成操作。
 
 選型與先前驗證見 [backend evaluation](../../../docs/notebooklm-integration-evaluation.md)。
