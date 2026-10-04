@@ -4,7 +4,8 @@
 的 Search Run，將使用者選取的 YouTube 搜尋結果匯入 NotebookLM。
 
 目前已實作 QueryTube Public API v1 Search Run client、runtime validation、
-最小匯入模型，以及 `nlyt search-runs list/get`。尚未實作 NotebookLM integration。
+最小匯入模型、`nlyt search-runs list/get`，以及以 `notebooklm-py` CLI 為 backend
+的 `NotebookLmCliProvider`。尚未實作 Search Run 匯入 workflow。
 
 ## 預計 workflow
 
@@ -17,8 +18,8 @@ QueryTube Search Run
 ```
 
 未來由 CLI 或 local Web UI 呼叫同一組 application use case，並透過
-`NotebookProvider` 匯入新建的 notebook。本階段只完成 Search Run 讀取與
-標準化，不選取影片，也不呼叫 NotebookLM。
+`NotebookProvider` 匯入新建的 notebook。目前提供 Search Run 讀取與
+標準化，以及獨立的 NotebookProvider adapter；尚未串接選取與匯入流程。
 
 ## QueryTube v1 CLI
 
@@ -126,12 +127,14 @@ npm start -- --help
 
 已納入 `package-lock.json`；需要依 lockfile 重現安裝時可使用 `npm ci`。
 目前正式 dependency 只有開發工具；NotebookLM backend 已選定為 `notebooklm-py`，
-但 CLI 尚未安裝為正式 project dependency。Authentication/session 與
-list/create/YouTube/session persistence live validation 均已完成。預計由 TypeScript
-infrastructure adapter 使用 Node.js `execFile` 呼叫 CLI。選型證據與風險記錄於
+CLI 是獨立安裝的 Python runtime dependency。Authentication/session 與
+list/create/YouTube/session persistence live validation 均已完成。TypeScript
+infrastructure adapter 已使用 Node.js `execFile` 呼叫 CLI；設定與登入 setup 見
+[NotebookLM adapter README](src/infrastructure/notebooklm/README.md)。選型證據與風險記錄於
 [`docs/notebooklm-integration-evaluation.md`](docs/notebooklm-integration-evaluation.md)。
-runtime validation 使用小型 TypeScript parser，沒有新增 runtime dependency。所有自動測試使用 mock HTTP
-responses；CLI 子程序使用 test-only fetch preload，不存取 QueryTube 或 Firebase。
+runtime validation 使用小型 TypeScript parser，沒有新增 runtime dependency。HTTP 自動測試使用 mock responses；CLI 子程序使用 test-only fetch preload。
+NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
+所有自動測試不存取 QueryTube、Firebase 或 NotebookLM。
 
 ## 目錄與邊界
 
@@ -143,7 +146,7 @@ src/
 │   └── notebook-provider.ts # NotebookProvider
 ├── infrastructure/
 │   ├── querytube/            # HTTP client、runtime contract DTO、mapper
-│   └── notebooklm/           # 預留 NotebookProvider adapter（選型見 docs）
+│   └── notebooklm/           # NotebookLmCliProvider、runner、config、runtime contract
 ├── cli/                     # nlyt search-runs list/get 與說明
 └── web/                     # 預留 local Web UI 與本機 server
 tests/                       # client、contract、mapper 與編譯後 CLI 測試
@@ -186,12 +189,11 @@ QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不
 
 本機資料與未來 session 資料可放在 `.local/`、`.notebooklm/` 或 `.env`；
 這些位置已加入 `.gitignore`。本機 live evaluation 的 CLI session 位於 `.local/`；
-正式 adapter 的 session/profile 設定尚未實作。
+正式 adapter 支援 CLI executable、storage path 與 timeout 設定，詳見其 README。
 
 ## 尚未完成
 
 - 影片選取、共用匯入 use case 與匯入報告。
-- 正式 `NotebookProvider` adapter（backend 已選定，尚未實作）。
 - 真正的 CLI 匯入命令與完整 local Web UI。
 
 本階段不實作 Cloud Run deployment、多使用者 authentication 或完整
@@ -199,7 +201,7 @@ NotebookLM workflow，也未引入 DDD framework 或 DI container。
 
 ## 下一個最小 milestone
 
-開始實作正式 `NotebookProvider` adapter：由 TypeScript infrastructure 的
-`NotebookLmCliProvider` 使用 Node.js `execFile` 呼叫 `notebooklm-py` CLI。Live
-authentication/session、list/create/YouTube、UI confirmation 與跨 process reuse
-均已通過；選型證據見 [backend evaluation](docs/notebooklm-integration-evaluation.md)。
+實作 Search Run → NotebookLM Import Use Case，透過既有 `QueryTubeClient`
+與 `NotebookProvider` 介面串接流程。`NotebookLmCliProvider` 的 create/add 已完成
+單元測試、本機 subprocess integration tests 與 live smoke；provider 不負責
+影片選取、batch import 或報告。
