@@ -325,7 +325,8 @@ node dist/cli/index.js tui --user USER_ID
 ```text
 Loading Search Runs
 → Search Runs → Select Run → Select Videos
-→ Notebook Title → Confirm → Importing → Import Report
+→ Notebook Title → Confirm → Creating Notebook
+→ Importing selected sources with progress → Import Report
 ```
 
 Search Run list 使用 internal `SearchRunSummary` 顯示開始日期（local time，
@@ -362,7 +363,10 @@ stack、credential 或 storage path。空列表顯示 `No public Search Runs fou
 | Ctrl+C | Terminal emergency termination，包括 title／importing 畫面 |
 | 文字／貼上、Backspace | 輸入 title／刪除最後一個字元，保留空白與 Unicode |
 
-Importing 只提供整體狀態，不提供逐 source live progress；此時 q、Esc、Enter 與
+Creating Notebook 階段顯示選取來源數，不顯示 source percentage；建立成功後顯示
+逐 source progress bar、completed / total、成功與失敗數。Progress denominator 是
+實際要嘗試的 selected sources，skipped / not_selected 不計入 total 或 completed。
+Progress 僅供觀察；最終 Import Report 仍依 application result 產生。此時 q、Esc、Enter 與
 其他正常 navigation shortcuts 均無作用，不會離開畫面、取消 operation 或啟動
 第二次 import。完成後才進入 report 或既有 error handling。
 
@@ -398,7 +402,7 @@ JSON schema 與 exit semantics 不變。TUI、CLI 與未來 Web UI 共用 applic
 HTTP、fake backend executable 走編譯後 `nlyt tui` smoke，驗證確認前零 backend
 呼叫、匯入後 q 退出，並執行原有 CLI regression tests；不做真實 NotebookLM write。
 
-本版不包含逐 source progress、notebook browser／delete／edit／rename、login UI、
+本版不包含 notebook browser／delete／edit／rename、login UI、
 query editing、fuzzy search、mouse、theme、persistent settings、Web UI 或 release automation。
 
 ## CLI Import Workflow

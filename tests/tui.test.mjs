@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { render } from 'ink-testing-library';
 import { summaryDto, internalSummary } from './helpers/fixtures.mjs';
-import { formatStartedAt, searchRunStatus } from '../dist/tui/presentation.js';
+import { formatStartedAt, searchRunStatus, formatProgress } from '../dist/tui/presentation.js';
 import { SearchRunList } from '../dist/tui/components/SearchRunList.js';
 import { App } from '../dist/tui/App.js';
 import { ImportSearchRunToNotebook } from '../dist/application/import-search-run-to-notebook.js';
@@ -64,10 +64,11 @@ function mount(t, options = {}) {
   const useCase = new ImportSearchRunToNotebook(queryTube, provider, context);
   const createDependencies = () => {
     if (options.configError) throw options.configError;
-    return { queryTube, importer: { execute: async input => {
+    return { queryTube, importer: { execute: async (input, executionOptions) => {
       calls.execute.push(input);
+      options.captureProgress?.(executionOptions.onProgress);
       if (options.pendingImport) return options.pendingImport;
-      return useCase.execute(input);
+      return useCase.execute(input, executionOptions);
     } } };
   };
   const app = render(createElement(App, { userId, createDependencies }));
@@ -189,7 +190,7 @@ for (const outcome of ['resolve', 'reject']) {
     await confirm(ui);
     ui.app.stdin.write(keys.enter);
     ui.app.stdin.write(keys.enter);
-    await ui.screen('Importing...');
+    await ui.screen('Creating Notebook...');
     assert.match(ui.frame(), /Import in progress. Exiting cannot safely cancel the operation./);
     const frame = ui.frame();
     const listeners = ui.app.stdin.listenerCount('readable');
@@ -507,4 +508,108 @@ test('narrow Search Run rows truncate long names and keep the selection and ID v
   assert.doesNotMatch(frame, /\[31m|\[0m/);
   assert.equal(frame.split('\n').length, 3);
   assert.ok(frame.split('\n').every(line => Array.from(line).length <= 40));
+});
+
+function successfulResult(sources = videos) {
+  return { importId: 'NLYT-A83K2F', createdAt: '2026-10-04T08:09:31.123Z',
+    notebook: { id: 'nb-1', title: 'Research' }, sources: sources.map(source => ({
+      source, status: 'success', notebookSource: { id: `src-${source.videoId}`, url: source.url },
+    })) };
+}
+
+test('selected creation, live source progress and keyboard safety preserve authoritative report', async t => {
+  let resolve;
+  let emit;
+  const sources = Array.from({ length: 9 }, (_, index) => ({ ...videos[0], videoId: String(index) }));
+  const ui = mount(t, { videos: sources, pendingImport: new Promise(done => { resolve = done; }),
+    captureProgress: callback => { emit = callback; } });
+  await selectRun(ui);
+  await ui.key(' ');
+  await confirm(ui);
+  ui.app.stdin.write(keys.enter);
+  ui.app.stdin.write(keys.enter);
+  await ui.screen('Creating Notebook...');
+  assert.match(ui.frame(), /Selected sources: 8/);
+  assert.doesNotMatch(ui.frame(), /\d+%/);
+  emit({ phase: 'creating_notebook', total: 8 });
+  emit({ phase: 'importing_sources', completed: 0, total: 8, succeeded: 0, failed: 0 });
+  await ui.screen('0 / 8');
+  assert.match(ui.frame(), /\[--------------------\] 0 \/ 8 {2}0%/);
+  emit({ phase: 'importing_sources', completed: 3, total: 8, succeeded: 2, failed: 1 });
+  await ui.screen('3 / 8');
+  assert.match(ui.frame(), /\[#######-------------\] 3 \/ 8 {2}38%/);
+  assert.match(ui.frame(), /Succeeded 2/);
+  assert.match(ui.frame(), /Failed 1/);
+  const listeners = ui.app.stdin.listenerCount('readable');
+  for (const key of ['q', keys.esc, keys.enter, keys.down, keys.up, ' ', 'a', 'n']) {
+    await ui.key(key);
+    assert.match(ui.frame(), /3 \/ 8/);
+    assert.equal(ui.calls.execute.length, 1);
+    assert.equal(ui.app.stdin.listenerCount('readable'), listeners);
+  }
+  emit({ phase: 'importing_sources', completed: 8, total: 8, succeeded: 7, failed: 1 });
+  await ui.screen('8 / 8');
+  assert.match(ui.frame(), /\[####################\] 8 \/ 8 {2}100%/);
+  // Deliberately different from the observation: only the returned result drives the report.
+  resolve(successfulResult());
+  await ui.screen('Import complete — success');
+  assert.match(ui.frame(), /succeeded: 3/);
+  assert.match(ui.frame(), /failed: 0/);
+  emit({ phase: 'importing_sources', completed: 0, total: 8, succeeded: 0, failed: 0 });
+  await delay(40);
+  assert.match(ui.frame(), /Import complete — success/);
+});
+
+test('asynchronous progress events render each newest state and are ignored after unmount', async t => {
+  let resolve;
+  let emit;
+  const ui = mount(t, { pendingImport: new Promise(done => { resolve = done; }),
+    captureProgress: callback => { emit = callback; } });
+  await selectRun(ui);
+  await confirm(ui);
+  await ui.key(keys.enter);
+  for (let completed = 1; completed <= 3; completed++) {
+    await delay(10);
+    emit({ phase: 'importing_sources', completed, total: 3, succeeded: completed, failed: 0 });
+    await ui.screen(`${completed} / 3`);
+    assert.match(ui.frame(), new RegExp(`${Math.round(completed / 3 * 100)}%`));
+  }
+  ui.app.unmount();
+  const frames = ui.app.frames.length;
+  emit({ phase: 'importing_sources', completed: 0, total: 3, succeeded: 0, failed: 0 });
+  resolve(successfulResult());
+  await delay(40);
+  assert.equal(ui.app.frames.length, frames);
+});
+
+test('partial source failure progress stays importing until a fatal rejection', async t => {
+  let reject;
+  let emit;
+  const ui = mount(t, { pendingImport: new Promise((resolve, fail) => { reject = fail; }),
+    captureProgress: callback => { emit = callback; } });
+  await selectRun(ui);
+  await confirm(ui);
+  await ui.key(keys.enter);
+  emit({ phase: 'importing_sources', completed: 2, total: 3, succeeded: 1, failed: 1 });
+  await ui.screen('2 / 3');
+  assert.match(ui.frame(), /Importing sources/);
+  assert.match(ui.frame(), /Failed 1/);
+  reject(new ClientError('NOTEBOOKLM_TIMEOUT', secret));
+  await ui.screen('NOTEBOOKLM_TIMEOUT');
+  assert.doesNotMatch(ui.frame(), /secret|credential|traceback/);
+  emit({ phase: 'importing_sources', completed: 3, total: 3, succeeded: 2, failed: 1 });
+  await delay(40);
+  assert.match(ui.frame(), /NOTEBOOKLM_TIMEOUT/);
+});
+
+test('progress formatter rounds percentages, floors cells and clamps invalid presentation values', () => {
+  for (const [completed, total, expectedCompleted, expectedTotal, percentage, cells] of [
+    [0, 8, 0, 8, 0, 0], [3, 8, 3, 8, 38, 7], [5, 8, 5, 8, 63, 12],
+    [8, 8, 8, 8, 100, 20], [1, 3, 1, 3, 33, 6], [2, 3, 2, 3, 67, 13],
+    [1, 0, 0, 0, 0, 0], [-1, 8, 0, 8, 0, 0], [9, 8, 8, 8, 100, 20],
+    [NaN, 8, 0, 8, 0, 0], [1, Infinity, 0, 0, 0, 0],
+  ]) {
+    assert.deepEqual(formatProgress(completed, total), { completed: expectedCompleted, total: expectedTotal,
+      percentage, filled: '#'.repeat(cells), remaining: '-'.repeat(20 - cells) });
+  }
 });

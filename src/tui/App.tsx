@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { ClientError } from '../application/errors.js';
 import { ChoiceList } from './components/ChoiceList.js';
+import { ProgressBar } from './components/ProgressBar.js';
 import { SearchRunList } from './components/SearchRunList.js';
 import { Report } from './screens/Report.js';
 import { displayText, errorCode, friendlyError } from './presentation.js';
@@ -119,15 +120,19 @@ export function App({ userId, createDependencies }: AppProps) {
       if (key.escape) navigate({ screen: 'title', draft });
       else if (key.return) {
         // Change the synchronous ref before executing: repeated Enter cannot create a second notebook.
-        navigate({ screen: 'importing', draft });
+        const request = ++generation.current;
+        navigate({ screen: 'importing', draft, progress: { phase: 'creating_notebook', total: draft.selected.size } });
         void (async () => {
           try {
             const result = await dependencies.current!.importer.execute({ userId,
               searchRunId: draft.run.searchRunId, notebookTitle: draft.title,
-              selection: { videoIds: [...draft.selected] } });
-            if (active.current) navigate({ screen: 'report', draft, result });
+              selection: { videoIds: [...draft.selected] } }, { onProgress: progress => {
+              if (!active.current || request !== generation.current || current.current.screen !== 'importing') return;
+              navigate({ screen: 'importing', draft, progress });
+            } });
+            if (active.current && request === generation.current) navigate({ screen: 'report', draft, result });
           } catch (error) {
-            if (active.current) navigate({ screen: 'error', code: errorCode(error), back: draft });
+            if (active.current && request === generation.current) navigate({ screen: 'error', code: errorCode(error), back: draft });
           }
         })();
       }
@@ -164,7 +169,15 @@ export function App({ userId, createDependencies }: AppProps) {
     </>}
     {(state.screen === 'videos' || state.screen === 'title') && state.draft.notice && <Text color="yellow">{state.draft.notice}</Text>}
     {state.screen === 'importing' && <>
-      <Text bold>Importing...</Text><Text>Creating notebook and importing selected YouTube sources.</Text>
+      {state.progress.phase === 'creating_notebook' ? <>
+        <Text bold>Creating Notebook...</Text>
+        <Text dimColor>Selected sources: {state.progress.total}</Text>
+      </> : <>
+        <Text bold>Importing sources</Text>
+        <ProgressBar completed={state.progress.completed} total={state.progress.total} />
+        <Text><Text dimColor>Succeeded </Text><Text color="green">{state.progress.succeeded}</Text></Text>
+        <Text><Text dimColor>Failed </Text><Text color="red">{state.progress.failed}</Text></Text>
+      </>}
       <Text color="yellow">Import in progress. Exiting cannot safely cancel the operation.</Text>
     </>}
     {state.screen === 'report' && <Report result={state.result} />}

@@ -64,3 +64,13 @@ export function searchRunStatus(status: SearchRunSummary['status']) {
     case 'running': return { symbol: '…', color: 'cyan' } as const;
   }
 }
+
+/** A fixed 20-cell ASCII bar; round percentages and floor filled cells deterministically. */
+export function formatProgress(completed: number, total: number) {
+  const safeTotal = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0;
+  const safeCompleted = Number.isFinite(completed) ? Math.max(0, Math.min(safeTotal, Math.floor(completed))) : 0;
+  const ratio = safeTotal > 0 ? safeCompleted / safeTotal : 0;
+  const filled = Math.floor(ratio * 20);
+  return { completed: safeCompleted, total: safeTotal, percentage: Math.round(ratio * 100),
+    filled: '#'.repeat(filled), remaining: '-'.repeat(20 - filled) };
+}

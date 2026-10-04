@@ -240,3 +240,106 @@ test('selection composes with real mapper dedupe and canonical order through moc
   ]);
   assert.deepEqual(dto, before);
 });
+
+const progress = (completed, total, succeeded = completed, failed = 0) => ({
+  phase: 'importing_sources', completed, total, succeeded, failed,
+});
+
+test('progress observes fetch, create and sequential source completion in exact order', async () => {
+  const { useCase, calls } = fixture();
+  const events = [];
+  const result = await useCase.execute(input, { onProgress: event => {
+    events.push(event);
+    calls.push(['progress', event]);
+  } });
+  assert.deepEqual(events, [{ phase: 'creating_notebook', total: 3 },
+    progress(0, 3), progress(1, 3), progress(2, 3), progress(3, 3)]);
+  assert.deepEqual(calls, [
+    ['get', input.userId, input.searchRunId], ['progress', events[0]], ['create', notebook.title],
+    ['progress', events[1]],
+    ...videos.flatMap((source, index) => [['add', notebook.id, source.url], ['progress', events[index + 2]]]),
+  ]);
+  assert.deepEqual(result, { ...metadata, notebook, sources: videos.map(success) });
+});
+
+test('progress counts failed attempts without changing partial failure results', async () => {
+  const addErrors = [];
+  addErrors[1] = new ClientError('NOTEBOOKLM_BACKEND_ERROR', 'secret');
+  const { useCase, calls } = fixture({ addErrors });
+  const events = [];
+  const result = await useCase.execute(input, { onProgress: event => events.push(event) });
+  assert.deepEqual(events, [{ phase: 'creating_notebook', total: 3 },
+    progress(0, 3), progress(1, 3), progress(2, 3, 1, 1), progress(3, 3, 2, 1)]);
+  assert.deepEqual(result.sources, [success(videos[0]), failure(videos[1], 'NOTEBOOKLM_BACKEND_ERROR'), success(videos[2])]);
+  assert.equal(summarizeImportSources(result.sources).status, 'partial_failure');
+  assert.deepEqual(calls, expectedCalls(videos));
+});
+
+for (const videoIds of [['a', 'c'], ['a', 'a', 'c']]) {
+  test(`30 sources with selection ${videoIds} observe only two attempted sources`, async () => {
+    const sources = [...videos, ...Array.from({ length: 27 }, (_, index) => ({
+      videoId: `extra-${index}`, title: '', url: `https://youtube.test/${index}`,
+    }))];
+    const { useCase, calls } = fixture({ sources });
+    const events = [];
+    const result = await useCase.execute({ ...input, selection: { videoIds } }, { onProgress: event => events.push(event) });
+    assert.deepEqual(events, [{ phase: 'creating_notebook', total: 2 }, progress(0, 2), progress(1, 2), progress(2, 2)]);
+    assert.equal(result.sources.filter(source => source.status === 'skipped').length, 28);
+    assert.deepEqual(calls, expectedCalls([videos[0], videos[2]]));
+  });
+}
+
+test('progress denominator retains duplicate source attempts supplied by the port', async () => {
+  const sources = [videos[0], videos[0], videos[1]];
+  const { useCase, calls } = fixture({ sources });
+  const events = [];
+  const result = await useCase.execute({ ...input, selection: { videoIds: ['a', 'a'] } }, {
+    onProgress: event => events.push(event),
+  });
+  assert.deepEqual(events, [{ phase: 'creating_notebook', total: 2 }, progress(0, 2), progress(1, 2), progress(2, 2)]);
+  assert.deepEqual(result.sources, [success(videos[0]), success(videos[0]), skipped(videos[1])]);
+  assert.deepEqual(calls, expectedCalls(sources.slice(0, 2)));
+});
+
+test('throwing progress observer cannot change writes or authoritative results', async () => {
+  const addErrors = [];
+  addErrors[1] = new Error('backend failure');
+  const { useCase, calls } = fixture({ addErrors });
+  let observations = 0;
+  const result = await useCase.execute(input, { onProgress: () => {
+    observations++;
+    throw new Error('presentation failed');
+  } });
+  assert.equal(observations, 5);
+  assert.deepEqual(result, { ...metadata, notebook, sources: [
+    success(videos[0]), failure(videos[1], 'INTERNAL_ERROR'), success(videos[2]),
+  ] });
+  assert.deepEqual(calls, expectedCalls(videos));
+});
+
+test('create failure emits only creating_notebook, retaining fatal semantics', async () => {
+  const error = new ClientError('NOTEBOOKLM_TIMEOUT', 'unconfirmed');
+  const { useCase, calls } = fixture({ createError: error });
+  const events = [];
+  await assert.rejects(useCase.execute(input, { onProgress: event => events.push(event) }), actual =>
+    actual.cause === error && actual.context.importId === metadata.importId);
+  assert.deepEqual(events, [{ phase: 'creating_notebook', total: 3 }]);
+  assert.deepEqual(calls, expectedCalls([]));
+});
+
+test('validation and fetch failures never emit write progress', async () => {
+  for (const [command, options, code] of [
+    [{ ...input, notebookTitle: '' }, {}, 'IMPORT_INVALID_ARGUMENTS'],
+    [{ ...input, selection: { videoIds: [123] } }, {}, 'IMPORT_INVALID_SELECTION'],
+    [{ ...input, selection: { videoIds: [] } }, {}, 'IMPORT_NO_SELECTED_SOURCES'],
+    [{ ...input, selection: { videoIds: ['unknown'] } }, {}, 'IMPORT_INVALID_SELECTION'],
+    [input, { sources: [] }, 'IMPORT_NO_SOURCES'],
+    [input, { fetchError: new ClientError('QUERYTUBE_NOT_FOUND', 'absent') }, 'QUERYTUBE_NOT_FOUND'],
+  ]) {
+    const { useCase, calls } = fixture(options);
+    const events = [];
+    await assert.rejects(useCase.execute(command, { onProgress: event => events.push(event) }), { code });
+    assert.deepEqual(events, []);
+    assert.equal(calls.some(call => call[0] === 'create' || call[0] === 'add'), false);
+  }
+});

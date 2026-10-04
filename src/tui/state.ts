@@ -1,5 +1,5 @@
 import type { ClientErrorCode } from '../application/errors.js';
-import type { ImportSearchRunToNotebook, ImportSearchRunResult } from '../application/import-search-run-to-notebook.js';
+import type { ImportSearchRunToNotebook, ImportSearchRunResult, ImportProgressEvent } from '../application/import-search-run-to-notebook.js';
 import type { QueryTubeClient } from '../application/querytube-client.js';
 import type { ImportSource, SearchRunSummary } from '../domain/search-run.js';
 
@@ -26,6 +26,6 @@ export type TuiState =
   | { readonly screen: 'loading'; readonly label: string; readonly back?: BrowserState }
   | ({ readonly screen: 'search-runs' } & BrowserState)
   | { readonly screen: 'videos' | 'title' | 'confirm'; readonly draft: ImportDraft }
-  | { readonly screen: 'importing'; readonly draft: ImportDraft }
+  | { readonly screen: 'importing'; readonly draft: ImportDraft; readonly progress: ImportProgressEvent }
   | { readonly screen: 'report'; readonly draft: ImportDraft; readonly result: ImportSearchRunResult }
   | { readonly screen: 'error'; readonly code: ClientErrorCode; readonly back?: BrowserState };
