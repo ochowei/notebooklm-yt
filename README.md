@@ -203,30 +203,33 @@ QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不
 
 輸入為 `{ userId, searchRunId, notebookTitle }`，三者在 fetch 前驗證非空、
 非純空白且不含 NUL；IDs 也不接受 `.` / `..`。無效輸入回報
-`ClientError` 的 `IMPORT_INVALID_ARGUMENTS`，title 原樣傳給 provider。
+`ClientError` 的 `IMPORT_INVALID_ARGUMENTS`。驗證後建立一次 import context，
+將 user title 加上識別 suffix 後傳給 provider。
 目前沒有獨立的 `SearchRun` / `SearchResult` 型別；`getSearchRun()` 回傳
 internal `ImportSource`，其中每筆影片為 `ImportVideo`。
 
 ```text
 QueryTubeClient.getSearchRun(userId, searchRunId)
   → ImportSearchRunToNotebook
-  → NotebookProvider.createNotebook(notebookTitle)
+  → import context (importId, createdAt, formatted notebookTitle)
+  → NotebookProvider.createNotebook(formatted notebookTitle)
   → sequential addYouTubeSource(notebook.id, video.url)
-  → { notebook, sources }
+  → { importId, createdAt, notebook, sources }
 ```
 
 Use case 匯入所有 `ImportSource.videos`，保留該陣列順序，不另做去重、排序、
 ranking、limit 或互動選片。真實 QueryTube mapper 的既有 videoId 去重與排序
 policy 如上；若其他 port implementation 傳入 duplicates，use case 原樣逐筆匯入。
 
-結果為 `{ notebook: Notebook, sources: readonly ImportSourceResult[] }`；
+結果為 `{ importId: string, createdAt: string, notebook: Notebook, sources: readonly ImportSourceResult[] }`；
 每筆包含原始 internal `source: ImportVideo` 與 `status`：
 
 - `success`：包含 `notebookSource: NotebookSource`。
 - `failure`：只包含 `error: { code: ClientErrorCode }`，沿用 `ClientError.code`；
   非 `ClientError` 使用 `INTERNAL_ERROR`，不暴露 message、stack 或 backend diagnostics。
 
-Fetch / create 失敗直接 reject，保留既有 error；空 `videos` 在 create 前以
+Fetch / create 失敗以 `ImportSearchRunError` reject，保留原錯誤於 `cause`、
+既有 stable code，以及本次 `context`（含 formatted title）；空 `videos` 在 create 前以
 `IMPORT_NO_SOURCES` reject，不建立空 notebook。Create 成功後逐片 sequentially
 await；單片失敗記錄後繼續，即使全部失敗仍回傳已建立的 notebook 與全部 failure。
 沒有 retry、rollback、delete 或額外 source processing wait；success 代表 provider
@@ -253,7 +256,7 @@ nlyt import search-run RUN_ID --user USER_ID --title "nlyt import smoke" --json
 node dist/cli/index.js import search-run RUN_ID --user USER_ID --title "nlyt import smoke"
 ```
 
-三個輸入皆必要，非空且不含 NUL，ID 不接受 `.` / `..`；title 原樣保留。
+三個輸入皆必要，非空且不含 NUL，ID 不接受 `.` / `..`；user title 原樣保留在識別 suffix 前面。
 CLI 自動載入 cwd `.env`，既有環境變數優先；QueryTube configuration 同上。
 NotebookLM 需要獨立安裝的 CLI 及既有 authentication session，可用
 `NOTEBOOKLM_CLI_PATH`、`NOTEBOOKLM_STORAGE_PATH`、`NOTEBOOKLM_TIMEOUT_MS` 設定，
@@ -264,7 +267,7 @@ Composition 為 CLI → `ImportSearchRunToNotebook(QueryTubeHttpClient,
 NotebookLmCliProvider)` → NotebookLM；fetch、create、sequential add、partial failure
 記錄仍由既有 use case 處理，沒有改變 application/domain semantics。
 
-Human output 顯示 Search Run user/run、Notebook title/created/id、Sources
+Human output 新增 Import id/created，並顯示 Search Run user/run、Notebook title/created/id、Sources
 attempted/succeeded/failed、Result 與 stable error codes，失敗 source 附 videoId。
 取得 application result 時輸出 stdout；fatal failure 輸出 stderr，stdout 空。
 不輸出 backend stdout/stderr、stack、credentials 或私人 notebook list。
@@ -274,9 +277,11 @@ JSON 模式所有結果皆在 stdout 輸出一個 object 加換行，stderr 空�
 ```json
 {
   "status": "success",
+  "importId": "NLYT-A83K2F",
+  "createdAt": "2026-10-04T08:09:31.123Z",
   "userId": "USER_ID",
   "searchRunId": "RUN_ID",
-  "notebook": { "title": "nlyt import smoke", "created": true, "id": "NOTEBOOK_ID" },
+  "notebook": { "title": "nlyt import smoke [04-1609] [NLYT-A83K2F]", "created": true, "id": "NOTEBOOK_ID" },
   "sources": { "attempted": 3, "succeeded": 3, "failed": 0 },
   "errors": []
 }
@@ -312,6 +317,33 @@ Live validation 另行執行上述 CLI，使用真實 API、CLI executable、既
 選小型公開 run 並記錄結果；session 缺失/過期時以 `NOTEBOOKLM_AUTH_REQUIRED`
 回報，backend 未安裝以 `NOTEBOOKLM_CONFIG_INVALID` 回報，不自動登入或重試。
 影片選取、完整 Import Report 與 Web UI 仍屬後續 scope。
+
+### Import identification
+
+- **Import ID**：notebooklm-yt 一次 import operation / attempt 的人類可讀識別，
+  格式 `NLYT-XXXXXX`。使用 Node.js `crypto.randomInt(36)` 獨立抽取六個
+  大寫英數字元，空間為 `36^6`（約 21.8 億），不保證全域唯一。
+  同一 Search Run 每次 import 都重新產生，不使用 sequence counter 或 persistent state。
+- **createdAt**：import context 建立時間，完整 machine-readable UTC ISO timestamp
+  （如 `2026-10-04T08:09:31.123Z`）。
+- **Search Run ID**：QueryTube 來源資料識別，與 Import ID 分開。
+- **NotebookLM Notebook ID**：backend identifier，仍用於 source import，不由 Import ID 取代。
+
+Title convention 為 `<user title> [DD-HHmm] [NLYT-XXXXXX]`，例如
+`WoW 永恆 [04-1609] [NLYT-A83K2F]`。`DD-HHmm` 使用執行 Node.js 的本機
+timezone，與 `createdAt` 來自同一次 clock 取值；原始 title（包含空白）保留在最前面。
+格式集中於 `src/application/import-context.ts`，provider 只接收最終 title。
+Use case 可選第三個 dependency `{ clock, generateId }` 供固定時間與 ID 的測試使用。
+
+驗證有效 application input 後、fetch 前建立 context。Success、partial failure、
+全部 sources 失敗，以及 fetch / create fatal failure 都保留同一個 `importId` /
+`createdAt`；create request 未確認時也保留 requested formatted title，
+`created: false` / `id: null` 仍代表未確認。Fatal error 不重新產生 ID。
+CLI 的 JSON contract 只新增頂層 `importId` / `createdAt`；在 workflow 啟動前
+失敗（如 invalid arguments、QueryTube config 或 timeout config 初始化錯誤）時，
+兩欄為 `null`。既有 status、counts、error codes、stdout/stderr 與 exit codes 不變。
+Application fatal error 現在提供帶 context 的 wrapper，原始 error 可從 `cause` 取得。
+沒有新增 history、database、state file、retry 或 rollback。
 
 ### CLI live validation（2026-10-04）
 

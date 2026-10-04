@@ -1,16 +1,20 @@
+import { ImportSearchRunError } from '../application/import-context.js';
 import { ClientError } from '../application/errors.js';
 import type { ImportSearchRunInput, ImportSearchRunResult } from '../application/import-search-run-to-notebook.js';
 
 /** Presentation contract only; application results remain authoritative. */
 export function importReport(input: Partial<ImportSearchRunInput>, result?: ImportSearchRunResult, error?: unknown) {
+  const context = error instanceof ImportSearchRunError ? error.context : undefined;
   const attempted = result?.sources.length ?? 0;
   const succeeded = result?.sources.filter(source => source.status === 'success').length ?? 0;
   const failed = attempted - succeeded;
   return {
     status: !result || succeeded === 0 ? 'failure' : failed ? 'partial_failure' : 'success',
+    importId: result?.importId ?? context?.importId ?? null,
+    createdAt: result?.createdAt ?? context?.createdAt ?? null,
     userId: input.userId ?? null,
     searchRunId: input.searchRunId ?? null,
-    notebook: { title: result?.notebook.title ?? input.notebookTitle ?? null,
+    notebook: { title: result?.notebook.title ?? context?.notebookTitle ?? input.notebookTitle ?? null,
       created: result !== undefined, id: result?.notebook.id ?? null },
     sources: { attempted, succeeded, failed },
     errors: result ? result.sources.flatMap(source => source.status === 'failure'
@@ -25,7 +29,8 @@ export function importExitCode(report: ReturnType<typeof importReport>): number 
 
 export function importHumanOutput(report: ReturnType<typeof importReport>): string {
   return [
-    'Search Run', `- user: ${report.userId ?? '(not provided)'}`, `- run: ${report.searchRunId ?? '(not provided)'}`,
+    'Import', `- id: ${report.importId ?? '(not started)'}`, `- created: ${report.createdAt ?? '(not started)'}`,
+    '', 'Search Run', `- user: ${report.userId ?? '(not provided)'}`, `- run: ${report.searchRunId ?? '(not provided)'}`,
     '', 'Notebook', `- title: ${report.notebook.title ?? '(not provided)'}`,
     `- created: ${report.notebook.created ? 'yes' : 'no (not confirmed)'}`,
     ...(report.notebook.id ? [`- id: ${report.notebook.id}`] : []),

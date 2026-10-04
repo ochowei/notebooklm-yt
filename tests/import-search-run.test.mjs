@@ -7,7 +7,12 @@ import { NotebookLmCliProvider } from '../dist/infrastructure/notebooklm/noteboo
 import { detail } from './helpers/fixtures.mjs';
 
 const input = { userId: 'user-1', searchRunId: 'run-1', notebookTitle: 'Research' };
-const notebook = { id: 'nb-1', title: input.notebookTitle };
+const metadata = { importId: 'NLYT-A83K2F', createdAt: '2026-10-04T08:09:31.123Z' };
+const dependencies = { clock: () => new Date(metadata.createdAt), generateId: () => metadata.importId };
+const date = dependencies.clock();
+const pad = value => String(value).padStart(2, '0');
+const suffix = ` [${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}] [${metadata.importId}]`;
+const notebook = { id: 'nb-1', title: input.notebookTitle + suffix };
 const videos = ['a', 'b', 'c'].map(videoId => ({
   videoId, title: videoId, url: `https://www.youtube.com/watch?v=${videoId}`,
 }));
@@ -42,18 +47,18 @@ function fixture({ sources = videos, fetchError, createError, addErrors = [] } =
       return notebookSource(sources[index]);
     },
     deleteNotebook: async () => assert.fail('must not delete'),
-  });
+  }, dependencies);
   return { useCase, calls };
 }
 
 const expectedCalls = sources => [
-  ['get', input.userId, input.searchRunId], ['create', input.notebookTitle],
+  ['get', input.userId, input.searchRunId], ['create', notebook.title],
   ...sources.map(source => ['add', notebook.id, source.url]),
 ];
 
 test('happy path fetches and creates once, importing A/B/C sequentially', async () => {
   const { useCase, calls } = fixture();
-  assert.deepEqual(await useCase.execute(input), { notebook, sources: videos.map(success) });
+  assert.deepEqual(await useCase.execute(input), { ...metadata, notebook, sources: videos.map(success) });
   assert.deepEqual(calls, expectedCalls(videos));
 });
 
@@ -66,14 +71,16 @@ test('empty run fails before creating any NotebookLM resource', async () => {
 test('Search Run fetch failure preserves the error and never calls NotebookProvider', async () => {
   const error = new ClientError('QUERYTUBE_NOT_FOUND', 'Not found');
   const { useCase, calls } = fixture({ fetchError: error });
-  await assert.rejects(useCase.execute(input), actual => actual === error);
+  await assert.rejects(useCase.execute(input), actual => actual.cause === error && actual.context.importId === metadata.importId
+    && actual.context.createdAt === metadata.createdAt && actual.context.notebookTitle === notebook.title);
   assert.deepEqual(calls, [['get', input.userId, input.searchRunId]]);
 });
 
 test('create failure preserves the error, adds nothing and does not retry', async () => {
   const error = new ClientError('NOTEBOOKLM_TIMEOUT', 'Unconfirmed create');
   const { useCase, calls } = fixture({ createError: error });
-  await assert.rejects(useCase.execute(input), actual => actual === error);
+  await assert.rejects(useCase.execute(input), actual => actual.cause === error && actual.context.importId === metadata.importId
+    && actual.context.createdAt === metadata.createdAt && actual.context.notebookTitle === notebook.title);
   assert.deepEqual(calls, expectedCalls([]));
 });
 
@@ -82,7 +89,7 @@ test('partial failure retains A and C successes and only B stable code without r
   addErrors[1] = new ClientError('NOTEBOOKLM_BACKEND_ERROR', 'secret traceback');
   const { useCase, calls } = fixture({ addErrors });
   const result = await useCase.execute(input);
-  assert.deepEqual(result, { notebook, sources: [
+  assert.deepEqual(result, { ...metadata, notebook, sources: [
     success(videos[0]), failure(videos[1], 'NOTEBOOKLM_BACKEND_ERROR'), success(videos[2]),
   ] });
   assert.doesNotMatch(JSON.stringify(result), /secret|traceback|stack/);
@@ -95,7 +102,7 @@ test('all sources failing still returns notebook, with safe unknown errors and n
       new ClientError('NOTEBOOKLM_AUTH_REQUIRED', 'secret cookie'), unknown,
     ] });
     const result = await useCase.execute(input);
-    assert.deepEqual(result, { notebook, sources: [
+    assert.deepEqual(result, { ...metadata, notebook, sources: [
       failure(videos[0], 'NOTEBOOKLM_AUTH_REQUIRED'), failure(videos[1], 'INTERNAL_ERROR'),
     ] });
     assert.deepEqual(calls, expectedCalls(videos.slice(0, 2)));
@@ -106,7 +113,7 @@ test('use case preserves port order and duplicates without selection or mutation
   const sources = [videos[2], videos[0], videos[2], videos[1]];
   const before = structuredClone(sources);
   const { useCase, calls } = fixture({ sources });
-  assert.deepEqual(await useCase.execute(input), { notebook, sources: sources.map(success) });
+  assert.deepEqual(await useCase.execute(input), { ...metadata, notebook, sources: sources.map(success) });
   assert.deepEqual(calls, expectedCalls(sources));
   assert.deepEqual(sources, before);
 });
@@ -128,11 +135,11 @@ test('invalid inputs reject before fetch, including title validation at the appl
   }
 });
 
-test('title is passed verbatim without generating or normalizing a naming policy', async () => {
+test('user title is preserved verbatim before the centralized identification suffix', async () => {
   const { useCase, calls } = fixture();
   const notebookTitle = '  --中文 research  ';
   await useCase.execute({ ...input, notebookTitle });
-  assert.deepEqual(calls[1], ['create', notebookTitle]);
+  assert.deepEqual(calls[1], ['create', notebookTitle + suffix]);
 });
 
 test('actual adapters compose with mocked transport/runner and preserve existing mapper semantics', async () => {
@@ -146,11 +153,11 @@ test('actual adapters compose with mocked transport/runner and preserve existing
     commands.push(args);
     return args[0] === 'create' ? { notebook } : { source: { id: `src-${args.at(-1).slice(-1)}` } };
   } });
-  const result = await new ImportSearchRunToNotebook(queryTube, provider).execute(input);
+  const result = await new ImportSearchRunToNotebook(queryTube, provider, dependencies).execute(input);
   assert.equal(fetches, 1);
-  assert.deepEqual(result, { notebook, sources: videos.map(success) });
+  assert.deepEqual(result, { ...metadata, notebook, sources: videos.map(success) });
   assert.deepEqual(commands, [
-    ['create', '--json', '--', input.notebookTitle],
+    ['create', '--json', '--', notebook.title],
     ...videos.map(source => ['source', 'add', '--notebook', notebook.id, '--type', 'youtube', '--json', '--', source.url]),
   ]);
 });

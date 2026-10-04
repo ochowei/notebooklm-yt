@@ -60,18 +60,24 @@ for (const [mode, status, exit, succeeded] of [
       assert.equal(result.stderr, '');
       const commands = calls();
       assert.equal(commands.length, 4, 'one create, three adds; no retries/list/delete');
-      assert.deepEqual(commands[0].slice(2), ['--backend', 'web', '--quiet', 'create', '--json', '--', args.at(-1)]);
+      const title = commands[0].at(-1);
+      assert.ok(title.startsWith(args.at(-1) + ' ['));
+      assert.match(title, / \[\d{2}-\d{4}\] \[NLYT-[A-Z0-9]{6}\]$/);
+      assert.deepEqual(commands[0].slice(2), ['--backend', 'web', '--quiet', 'create', '--json', '--', title]);
       for (const [index, command] of commands.slice(1).entries()) {
         assert.deepEqual(command.slice(2), ['--backend', 'web', '--quiet', 'source', 'add', '--notebook', 'nb-1',
           '--type', 'youtube', '--json', '--', `https://www.youtube.com/watch?v=${['a', 'b', 'c'][index]}`]);
       }
       if (json) {
         const payload = JSON.parse(result.stdout);
-        assert.deepEqual(Object.keys(payload), ['status', 'userId', 'searchRunId', 'notebook', 'sources', 'errors']);
+        assert.deepEqual(Object.keys(payload), ['status', 'importId', 'createdAt', 'userId', 'searchRunId', 'notebook', 'sources', 'errors']);
         assert.equal(payload.status, status);
+        assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
+        assert.equal(new Date(payload.createdAt).toISOString(), payload.createdAt);
+        assert.ok(title.endsWith(`[${payload.importId}]`));
         assert.equal(payload.userId, 'user-1');
         assert.equal(payload.searchRunId, 'run-1');
-        assert.deepEqual(payload.notebook, { title: args.at(-1), created: true, id: 'nb-1' });
+        assert.deepEqual(payload.notebook, { title, created: true, id: 'nb-1' });
         assert.deepEqual(payload.sources, { attempted: 3, succeeded, failed: 3 - succeeded });
         assert.equal(payload.errors.length, 3 - succeeded);
         for (const error of payload.errors) {
@@ -81,7 +87,7 @@ for (const [mode, status, exit, succeeded] of [
         }
         if (mode === 'partial') assert.equal(payload.errors[0].source.videoId, 'b');
       } else {
-        for (const text of ['Search Run\n- user: user-1\n- run: run-1', 'Notebook', '- created: yes',
+        for (const text of ['Import\n- id: ' + title.slice(-12, -1), '- created: ', 'Search Run\n- user: user-1\n- run: run-1', 'Notebook', '- created: yes',
           '- id: nb-1', `Sources\n- attempted: 3\n- succeeded: ${succeeded}\n- failed: ${3 - succeeded}`,
           `Result\n- ${status.replace('_', ' ')}`]) assert.ok(result.stdout.includes(text));
       }
@@ -112,7 +118,21 @@ for (const [overrides, code, callCount] of [
         const payload = JSON.parse(result.stdout);
         assert.equal(payload.status, 'failure');
         assert.deepEqual(payload.errors, [{ code }]);
-        assert.deepEqual(payload.notebook, { title: args.at(-1), created: false, id: null });
+        const started = !['QUERYTUBE_CONFIG_MISSING', 'QUERYTUBE_CONFIG_INVALID'].includes(code)
+          && overrides.NOTEBOOKLM_TIMEOUT_MS === undefined;
+        if (started) {
+          assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
+          assert.equal(new Date(payload.createdAt).toISOString(), payload.createdAt);
+          assert.ok(payload.notebook.title.startsWith(args.at(-1) + ' ['));
+          assert.ok(payload.notebook.title.endsWith(`[${payload.importId}]`));
+          if (callCount) assert.equal(payload.notebook.title, calls()[0].at(-1));
+        } else {
+          assert.equal(payload.importId, null);
+          assert.equal(payload.createdAt, null);
+          assert.equal(payload.notebook.title, args.at(-1));
+        }
+        assert.equal(payload.notebook.created, false);
+        assert.equal(payload.notebook.id, null);
         assert.deepEqual(payload.sources, { attempted: 0, succeeded: 0, failed: 0 });
       } else {
         assert.equal(result.stdout, '');
@@ -145,7 +165,7 @@ test('options before command and equals syntax preserve input and JSON output', 
   const { run } = fixture(t);
   const result = run(['--json', '--user=user-1', '--title=title', 'import', 'search-run', 'run-1']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).notebook.title, 'title');
+  assert.ok(JSON.parse(result.stdout).notebook.title.startsWith('title ['));
 });
 
 test('import composition loads NotebookLM settings from .env with environment precedence', t => {
