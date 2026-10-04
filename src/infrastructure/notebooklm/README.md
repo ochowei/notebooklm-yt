@@ -40,7 +40,7 @@ Login 是獨立的人工 setup；provider 不會啟動 browser，也不讀取/�
 | Env | Default | 說明 |
 | --- | --- | --- |
 | `NOTEBOOKLM_CLI_PATH` | `notebooklm` | 直接 executable；可指定 venv 的完整或相對路徑。預設嘗試 PATH，找不到則 config error，不假設已安裝。 |
-| `NOTEBOOKLM_STORAGE_PATH` | `~/.notebooklm/profiles/default/storage_state.json` | 既有 readable auth state file；相對路徑依 construction 時 cwd 轉成 absolute。沒有 shell `~` 展開，請使用完整路徑或 `$HOME`。 |
+| `NOTEBOOKLM_STORAGE_PATH` | `~/.notebooklm/profiles/default/storage_state.json`（由 `homedir()` 建立） | 既有 readable auth state file；自訂值不會展開 `~`、`$HOME`、`${HOME}` 或其他 shell 環境變數語法。請使用完整絕對路徑，或可由 construction 時 cwd 解析的相對路徑。 |
 | `NOTEBOOKLM_TIMEOUT_MS` | `60000` | 正整數，最大 2147483647 ms；create/add 共用 process timeout。 |
 
 ```ts
