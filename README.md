@@ -5,7 +5,8 @@
 
 目前已實作 QueryTube Public API v1 Search Run client、runtime validation、
 最小匯入模型、`nlyt search-runs list/get`，以及以 `notebooklm-py` CLI 為 backend
-的 `NotebookLmCliProvider`。尚未實作 Search Run 匯入 workflow。
+的 `NotebookLmCliProvider`，以及 Search Run → NotebookLM application use case。
+CLI import workflow 尚未實作。
 
 ## 預計 workflow
 
@@ -19,7 +20,8 @@ QueryTube Search Run
 
 未來由 CLI 或 local Web UI 呼叫同一組 application use case，並透過
 `NotebookProvider` 匯入新建的 notebook。目前提供 Search Run 讀取與
-標準化，以及獨立的 NotebookProvider adapter；尚未串接選取與匯入流程。
+標準化、NotebookProvider adapter，以及匯入全部 internal sources 的 application
+use case；影片選取與 CLI import workflow 尚未實作。
 
 ## QueryTube v1 CLI
 
@@ -141,9 +143,10 @@ NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
 ```text
 src/
 ├── domain/                  # ImportSource、SearchRunReference、Notebook 等內部資料型別
-├── application/             # 整合介面；未來放共用匯入 use case
+├── application/             # 整合介面、穩定 errors 與共用匯入 use case
 │   ├── querytube-client.ts   # QueryTubeClient
-│   └── notebook-provider.ts # NotebookProvider
+│   ├── notebook-provider.ts # NotebookProvider
+│   └── import-search-run-to-notebook.ts # ImportSearchRunToNotebook
 ├── infrastructure/
 │   ├── querytube/            # HTTP client、runtime contract DTO、mapper
 │   └── notebooklm/           # NotebookLmCliProvider、runner、config、runtime contract
@@ -157,7 +160,7 @@ tests/                       # client、contract、mapper 與編譯後 CLI 測�
   owner 一起保留，避免不同 owner 下的 opaque run ID 混淆。
 - `application/` 定義 `QueryTubeClient.listSearchRuns(userId)` /
   `getSearchRun(userId, runId)`、穩定 error codes，以及
-  `NotebookProvider.createNotebook()` / `addYouTubeSource()`。未來 use case
+  `NotebookProvider.createNotebook()` / `addYouTubeSource()`。匯入 use case
   透過傳入這兩個介面實作協調流程，不直接依賴 SDK 或 QueryTube DTO。
 - `infrastructure/` 將外部資料與 SDK/CLI 型別轉換成 domain 型別。
   NotebookLM backend 的 dependency、呼叫與 session 處理限定在 adapter。
@@ -191,9 +194,51 @@ QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不
 這些位置已加入 `.gitignore`。本機 live evaluation 的 CLI session 位於 `.local/`；
 正式 adapter 支援 CLI executable、storage path 與 timeout 設定，詳見其 README。
 
+## Search Run → NotebookLM application use case（已完成）
+
+`src/application/import-search-run-to-notebook.ts` 提供
+`new ImportSearchRunToNotebook(queryTubeClient, notebookProvider).execute(input)`。
+兩個 dependency 都是既有 application interface；composition 由未來 CLI / Web UI
+注入 infrastructure adapters，本輪沒有新增 CLI 命令。
+
+輸入為 `{ userId, searchRunId, notebookTitle }`，三者在 fetch 前驗證非空、
+非純空白且不含 NUL；IDs 也不接受 `.` / `..`。無效輸入回報
+`ClientError` 的 `IMPORT_INVALID_ARGUMENTS`，title 原樣傳給 provider。
+目前沒有獨立的 `SearchRun` / `SearchResult` 型別；`getSearchRun()` 回傳
+internal `ImportSource`，其中每筆影片為 `ImportVideo`。
+
+```text
+QueryTubeClient.getSearchRun(userId, searchRunId)
+  → ImportSearchRunToNotebook
+  → NotebookProvider.createNotebook(notebookTitle)
+  → sequential addYouTubeSource(notebook.id, video.url)
+  → { notebook, sources }
+```
+
+Use case 匯入所有 `ImportSource.videos`，保留該陣列順序，不另做去重、排序、
+ranking、limit 或互動選片。真實 QueryTube mapper 的既有 videoId 去重與排序
+policy 如上；若其他 port implementation 傳入 duplicates，use case 原樣逐筆匯入。
+
+結果為 `{ notebook: Notebook, sources: readonly ImportSourceResult[] }`；
+每筆包含原始 internal `source: ImportVideo` 與 `status`：
+
+- `success`：包含 `notebookSource: NotebookSource`。
+- `failure`：只包含 `error: { code: ClientErrorCode }`，沿用 `ClientError.code`；
+  非 `ClientError` 使用 `INTERNAL_ERROR`，不暴露 message、stack 或 backend diagnostics。
+
+Fetch / create 失敗直接 reject，保留既有 error；空 `videos` 在 create 前以
+`IMPORT_NO_SOURCES` reject，不建立空 notebook。Create 成功後逐片 sequentially
+await；單片失敗記錄後繼續，即使全部失敗仍回傳已建立的 notebook 與全部 failure。
+沒有 retry、rollback、delete 或額外 source processing wait；success 代表 provider
+確認註冊，與現有 adapter semantics 一致。
+
+自動測試涵蓋 happy path、空 run、fetch/create failure、partial/all failure、
+未知錯誤安全轉換、input validation、order/duplicates、adapter composition 與
+application/domain architecture boundary。自動測試使用 fakes，不做外部寫入。
+
 ## 尚未完成
 
-- 影片選取、共用匯入 use case 與匯入報告。
+- 影片選取與 presentation 匯入報告。
 - 真正的 CLI 匯入命令與完整 local Web UI。
 
 本階段不實作 Cloud Run deployment、多使用者 authentication 或完整
@@ -201,7 +246,7 @@ NotebookLM workflow，也未引入 DDD framework 或 DI container。
 
 ## 下一個最小 milestone
 
-實作 Search Run → NotebookLM Import Use Case，透過既有 `QueryTubeClient`
-與 `NotebookProvider` 介面串接流程。`NotebookLmCliProvider` 的 create/add 已完成
-單元測試、本機 subprocess integration tests 與 live smoke；provider 不負責
-影片選取、batch import 或報告。
+建立 CLI Import Workflow，組裝既有 adapters 並呼叫已完成的
+`ImportSearchRunToNotebook`，處理輸入與結果呈現。Application orchestration
+與其自動測試已完成，CLI import workflow 可開始；影片選取與完整 Import Report
+仍屬後續 scope。

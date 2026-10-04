@@ -166,9 +166,10 @@ test('config validates overrides and environment without reading credentials', t
 
 test('application/domain imports stay independent of infrastructure and subprocess', () => {
   for (const directory of ['src/application', 'src/domain']) {
-    for (const name of readdirSync(directory).filter(name => name.endsWith('.ts'))) {
+    for (const name of readdirSync(directory, { recursive: true }).filter(name => name.endsWith('.ts'))) {
       const text = readFileSync(join(directory, name), 'utf8');
       assert.doesNotMatch(text, /(?:from|import\s*\()\s*['"][^'"]*(?:child_process|infrastructure|notebooklm-py)/);
+      assert.doesNotMatch(text, /NotebookLmCliProvider|NotebookLmCliRunner|QueryTube\w*Dto/);
     }
   }
 });
