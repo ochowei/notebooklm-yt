@@ -1,4 +1,4 @@
-import type { ImportSource, ImportVideo, SearchRunReference } from '../../domain/search-run.js';
+import type { ImportSource, ImportVideo, SearchRunSummary } from '../../domain/search-run.js';
 import type { QueryTubeSearchRunDto, QueryTubeSearchRunListDto } from './contract.js';
 
 function compareText(a: string, b: string): number {
@@ -27,6 +27,12 @@ export function toImportSource(userId: string, run: QueryTubeSearchRunDto): Impo
   };
 }
 
-export function toSearchRunReferences(userId: string, list: QueryTubeSearchRunListDto): SearchRunReference[] {
-  return list.items.map(item => ({ userId, searchRunId: item.id }));
+export function toSearchRunSummaries(userId: string, list: QueryTubeSearchRunListDto): readonly SearchRunSummary[] {
+  return list.items.map(item => ({
+    userId, searchRunId: item.id,
+    querySetId: item.querySetId, querySetName: item.querySetName, status: item.status,
+    queryCount: item.queryCount, successfulQueries: item.successfulQueries,
+    failedQueries: item.failedQueries, totalResults: item.totalResults,
+    startedAt: item.startedAt, completedAt: item.completedAt, createdAt: item.createdAt,
+  }));
 }

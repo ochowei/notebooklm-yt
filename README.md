@@ -182,7 +182,7 @@ NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
 
 ```text
 src/
-├── domain/                  # ImportSource、SearchRunReference、Notebook 等內部資料型別
+├── domain/                  # ImportSource、SearchRunReference、SearchRunSummary、Notebook 等內部資料型別
 ├── application/             # 整合介面、穩定 errors 與共用匯入 use case
 │   ├── querytube-client.ts   # QueryTubeClient
 │   ├── notebook-provider.ts # NotebookProvider
@@ -197,7 +197,8 @@ tests/                       # client、contract、mapper 與編譯後 CLI 測�
 ```
 
 - `domain/` 只有內部資料型別，不依賴 SDK、HTTP 或 UI。`SearchRunReference`
-  只保留 `userId` 與 `searchRunId`；`ImportSource` 再加入 `{ videoId, url, title }[]`。
+  只保留 `userId` 與 `searchRunId`；`SearchRunSummary` 加入 Query Set 關聯、狀態、
+  query/result counts 與 ISO timestamps，供 UI 重用；`ImportSource` 加入 `{ videoId, url, title }[]`。
   owner 一起保留，避免不同 owner 下的 opaque run ID 混淆。
 - `application/` 定義 `QueryTubeClient.listSearchRuns(userId)` /
   `getSearchRun(userId, runId)`、穩定 error codes，以及
@@ -216,7 +217,7 @@ QueryTube v1 HTTP JSON (unknown)
   → runtime validation
   → minimal QueryTube DTO
   → mapper
-  → SearchRunReference / ImportSource
+  → SearchRunSummary / ImportSource
   → application interface / CLI
 ```
 
@@ -326,6 +327,24 @@ Loading Search Runs
 → Search Runs → Select Run → Select Videos
 → Notebook Title → Confirm → Importing → Import Report
 ```
+
+Search Run list 使用 internal `SearchRunSummary` 顯示開始日期（local time，
+`MM/DD HH:mm`）、Query Set name、status、result count、query count 與 Search Run ID：
+
+```text
+> 10/04 17:32  WoW Forever Multilingual
+  ✓ completed · 126 results · 18 queries
+  run_1790991576234_kb4wx
+```
+
+Query Set name 為 null、省略或空白時顯示 `Unnamed Search Run`。長名稱截斷，
+長列表以三行 row 高度分頁並保持選取項目可見；Enter 始終使用 `searchRunId`。
+日期 formatter 使用內建 Date / Intl，不新增 date library；無效日期顯示 `Unknown date`。
+標題使用 bold，選取列以 cyan + bold 顯示；completed 綠色、partial 黃色、
+failed 紅色、running cyan。ID、secondary metadata 與按鍵提示使用 dim；
+錯誤紅色、警告黃色、成功報告綠色（部分失敗黃色、全失敗紅色）。
+CLI `search-runs list` 的 human output 與 JSON `{ items: [{ userId, searchRunId }] }`
+保持原有格式；新增 summary metadata 只透過 application port 提供給 UI。
 
 讀取／匯入錯誤顯示 stable code 與友善訊息，不呈現 raw backend message、stderr、
 stack、credential 或 storage path。空列表顯示 `No public Search Runs found.`；

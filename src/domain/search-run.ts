@@ -10,6 +10,20 @@ export interface SearchRunReference {
   readonly searchRunId: string;
 }
 
+/** Reusable list metadata, independent of wire DTOs and presentation. */
+export interface SearchRunSummary extends SearchRunReference {
+  readonly querySetId: string | null;
+  readonly querySetName: string | null;
+  readonly status: 'running' | 'completed' | 'partial' | 'failed';
+  readonly queryCount: number;
+  readonly successfulQueries: number;
+  readonly failedQueries: number;
+  readonly totalResults: number;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly createdAt: string;
+}
+
 export interface ImportSource extends SearchRunReference {
   readonly videos: readonly ImportVideo[];
 }

@@ -102,7 +102,7 @@ try {
         process.exitCode = importExitCode(report);
       } else if (command === 'list') {
         const items = await client.listSearchRuns(values.user!);
-        console.log(json ? JSON.stringify({ items })
+        console.log(json ? JSON.stringify({ items: items.map(({ userId, searchRunId }) => ({ userId, searchRunId })) })
           : items.length ? items.map(item => item.searchRunId).join('\n') : 'No public Search Runs found.');
       } else {
         const source = await client.getSearchRun(values.user!, runId!);

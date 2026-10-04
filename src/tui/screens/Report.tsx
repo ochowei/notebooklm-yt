@@ -15,16 +15,16 @@ export function Report({ result }: { result: ImportSearchRunResult }) {
       Math.min(failures.length - 1, value + (key.upArrow ? -1 : 1))));
   });
   return <Box flexDirection="column">
-    <Text bold>Import complete — {status}</Text>
-    <Text>Import: {result.importId} / {result.createdAt}</Text>
+    <Text bold color={status === 'success' ? 'green' : status === 'partial_failure' ? 'yellow' : 'red'}>Import complete — {status}</Text>
+    <Text dimColor>Import: {result.importId} / {result.createdAt}</Text>
     <Text>Notebook: {displayText(result.notebook.title)}</Text>
     <Text>ID: {displayText(result.notebook.id)}</Text>
-    <Text>Sources</Text>
-    {Object.entries(summary).map(([name, count]) => <Text key={name}>{name}: {count}</Text>)}
-    {summary.failed > 0 && <Text>Failures</Text>}
+    <Text bold>Sources</Text>
+    {Object.entries(summary).map(([name, count]) => <Text key={name} color={name === 'failed' && count > 0 ? 'red' : name === 'succeeded' ? 'green' : undefined}>{name}: {count}</Text>)}
+    {summary.failed > 0 && <Text bold color="red">Failures</Text>}
     {failures.length > 0 && <ChoiceList labels={failures} index={index} reservedRows={20} />}
-    {failures.length > 0 && <Text>↑↓ Browse failures</Text>}
-    <Text>Success confirms registration; source processing may still be pending.</Text>
-    <Text>Enter Back to Search Runs · q Quit</Text>
+    {failures.length > 0 && <Text dimColor>↑↓ Browse failures</Text>}
+    <Text dimColor>Success confirms registration; source processing may still be pending.</Text>
+    <Text dimColor>Enter Back to Search Runs · q Quit</Text>
   </Box>;
 }

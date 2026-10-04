@@ -1,8 +1,8 @@
 import { ClientError } from '../../application/errors.js';
 import type { QueryTubeClient } from '../../application/querytube-client.js';
-import type { ImportSource, SearchRunReference } from '../../domain/search-run.js';
+import type { ImportSource, SearchRunSummary } from '../../domain/search-run.js';
 import { parseSearchRun, parseSearchRunList } from './contract.js';
-import { toImportSource, toSearchRunReferences } from './mapper.js';
+import { toImportSource, toSearchRunSummaries } from './mapper.js';
 
 function baseUrl(value: string | undefined): URL {
   if (!value?.trim()) {
@@ -38,9 +38,9 @@ export class QueryTubeHttpClient implements QueryTubeClient {
     this.base = baseUrl(url);
   }
 
-  async listSearchRuns(userId: string): Promise<readonly SearchRunReference[]> {
+  async listSearchRuns(userId: string): Promise<readonly SearchRunSummary[]> {
     const payload = await this.read(`api/v1/public/users/${segment(userId)}/search-runs`);
-    return toSearchRunReferences(userId, parseSearchRunList(payload));
+    return toSearchRunSummaries(userId, parseSearchRunList(payload));
   }
 
   async getSearchRun(userId: string, runId: string): Promise<ImportSource> {

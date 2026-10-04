@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { QueryTubeHttpClient } from '../dist/infrastructure/querytube/client.js';
 import { parseSearchRun, parseSearchRunList } from '../dist/infrastructure/querytube/contract.js';
-import { toImportSource, toSearchRunReferences } from '../dist/infrastructure/querytube/mapper.js';
-import { detail, summary, video } from './helpers/fixtures.mjs';
+import { toImportSource, toSearchRunSummaries } from '../dist/infrastructure/querytube/mapper.js';
+import { detail, summary, summaryDto, internalSummary, video } from './helpers/fixtures.mjs';
 
 const base = 'https://querytube.test';
 const code = expected => error => {
@@ -12,7 +12,7 @@ const code = expected => error => {
   return true;
 };
 
-test('list uses the v1 endpoint, encodes owner ID and returns internal references', async () => {
+test('list uses the v1 endpoint, encodes owner ID and returns internal summaries', async () => {
   const client = new QueryTubeHttpClient(`${base}/`, async (url, options) => {
     assert.equal(String(url), `${base}/api/v1/public/users/user%2F%3F%23%20%E4%B8%AD/search-runs`);
     assert.equal(options.method, 'GET');
@@ -21,7 +21,7 @@ test('list uses the v1 endpoint, encodes owner ID and returns internal reference
     assert.ok(options.signal instanceof AbortSignal);
     return Response.json({ items: [summary] });
   });
-  assert.deepEqual(await client.listSearchRuns('user/?# 中'), [{ userId: 'user/?# 中', searchRunId: 'run-1' }]);
+  assert.deepEqual(await client.listSearchRuns('user/?# 中'), [internalSummary('user/?# 中')]);
 });
 
 test('get uses the v1 endpoint, encodes run ID and maps detail', async () => {
@@ -44,7 +44,7 @@ test('base URL supports a deployment prefix without hard-coded host', async () =
 
 test('valid detail and list are validated as minimal API DTOs', () => {
   assert.deepEqual(parseSearchRun(detail()), { id: 'run-1', queryResults: [{ videos: [video] }] });
-  assert.deepEqual(parseSearchRunList({ items: [summary] }), { items: [{ id: 'run-1' }] });
+  assert.deepEqual(parseSearchRunList({ items: [summary] }), { items: [summaryDto] });
 });
 
 test('unknown additive fields at every level are ignored', () => {
@@ -53,7 +53,7 @@ test('unknown additive fields at every level are ignored', () => {
   payload.queryResults[0].futureQuery = ['new'];
   assert.deepEqual(parseSearchRun(payload), parseSearchRun(detail()));
   assert.deepEqual(parseSearchRunList({ items: [{ ...summary, futureSummary: true }], futureList: {} }),
-    { items: [{ id: 'run-1' }] });
+    { items: [summaryDto] });
 });
 
 test('empty videos, empty queries, empty list and empty title are valid', () => {
@@ -69,12 +69,15 @@ test('optional metadata can be omitted, null, or populated', () => {
     const payload = detail();
     for (const name of ['querySetId', 'querySetName', 'completedAt']) {
       if (value !== undefined) payload[name] = value;
+      else delete payload[name];
     }
     for (const name of ['relevanceLanguage', 'regionCode', 'errorCode', 'errorMessage']) {
       if (value !== undefined) payload.queryResults[0][name] = value;
     }
     assert.deepEqual(parseSearchRun(payload), parseSearchRun(detail()));
-    assert.deepEqual(parseSearchRunList({ items: [payload] }), { items: [{ id: 'run-1' }] });
+    assert.deepEqual(parseSearchRunList({ items: [payload] }).items[0], {
+      ...summaryDto, querySetId: value ?? null, querySetName: value ?? null, completedAt: value ?? null,
+    });
   }
 });
 
@@ -121,8 +124,8 @@ test('DTO retains duplicates; import source deduplicates by videoId independent 
   assert.deepEqual(toImportSource('user-1', { ...dto,
     queryResults: [...dto.queryResults].reverse().map(query => ({ videos: [...query.videos].reverse() })),
   }), expected);
-  assert.deepEqual(toSearchRunReferences('user-1', parseSearchRunList({ items: [summary] })),
-    [{ userId: 'user-1', searchRunId: 'run-1' }]);
+  assert.deepEqual(toSearchRunSummaries('user-1', parseSearchRunList({ items: [summary] })),
+    [internalSummary('user-1')]);
 });
 
 for (const [status, expected] of [[404, 'QUERYTUBE_NOT_FOUND'], [429, 'QUERYTUBE_RATE_LIMITED'],
@@ -170,5 +173,34 @@ test('empty and dot IDs fail before making requests', async () => {
   for (const id of ['', ' ', '.', '..']) {
     await assert.rejects(client.listSearchRuns(id), code('CLI_INVALID_ARGUMENTS'));
     await assert.rejects(client.getSearchRun('u', id), code('CLI_INVALID_ARGUMENTS'));
+  }
+});
+
+test('summary validates all statuses and preserves explicit nullable metadata', () => {
+  for (const status of ['running', 'completed', 'partial', 'failed']) {
+    const item = { ...summary, status, querySetId: null, querySetName: null, completedAt: null };
+    const dto = parseSearchRunList({ items: [item] });
+    assert.deepEqual(dto.items[0], { ...summaryDto, status, querySetId: null, querySetName: null, completedAt: null });
+    const before = structuredClone(dto);
+    assert.deepEqual(toSearchRunSummaries('u', dto), [internalSummary('u', dto.items[0])]);
+    assert.deepEqual(dto, before);
+  }
+});
+
+test('malformed summary metadata uses the stable contract error with field path', () => {
+  const cases = [['status', 'success'], ['status', null]];
+  for (const field of ['queryCount', 'successfulQueries', 'failedQueries', 'totalResults']) {
+    for (const value of ['1', null, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) cases.push([field, value]);
+  }
+  for (const field of ['id', 'status', 'queryCount', 'successfulQueries', 'failedQueries', 'totalResults', 'startedAt', 'createdAt']) {
+    cases.push([field, undefined]);
+  }
+  for (const field of ['startedAt', 'createdAt', 'querySetId', 'querySetName', 'completedAt']) cases.push([field, 123]);
+  for (const [field, value] of cases) {
+    assert.throws(() => parseSearchRunList({ items: [{ ...summary, [field]: value }] }), error => {
+      code('QUERYTUBE_CONTRACT_INVALID')(error);
+      assert.ok(error.message.includes(`items[0].${field}`));
+      return true;
+    });
   }
 });

@@ -1,7 +1,7 @@
 import type { ClientErrorCode } from '../application/errors.js';
 import type { ImportSearchRunToNotebook, ImportSearchRunResult } from '../application/import-search-run-to-notebook.js';
 import type { QueryTubeClient } from '../application/querytube-client.js';
-import type { ImportSource, SearchRunReference } from '../domain/search-run.js';
+import type { ImportSource, SearchRunSummary } from '../domain/search-run.js';
 
 export interface TuiDependencies {
   readonly queryTube: QueryTubeClient;
@@ -9,7 +9,7 @@ export interface TuiDependencies {
 }
 
 export interface BrowserState {
-  readonly runs: readonly SearchRunReference[];
+  readonly runs: readonly SearchRunSummary[];
   readonly runIndex: number;
 }
 

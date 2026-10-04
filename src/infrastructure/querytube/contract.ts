@@ -12,8 +12,22 @@ export interface QueryTubeSearchRunDto {
   readonly queryResults: readonly { readonly videos: readonly QueryTubeVideoDto[] }[];
 }
 
+export interface QueryTubeSearchRunSummaryDto {
+  readonly id: string;
+  readonly querySetId: string | null;
+  readonly querySetName: string | null;
+  readonly status: 'running' | 'completed' | 'partial' | 'failed';
+  readonly queryCount: number;
+  readonly successfulQueries: number;
+  readonly failedQueries: number;
+  readonly totalResults: number;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly createdAt: string;
+}
+
 export interface QueryTubeSearchRunListDto {
-  readonly items: readonly { readonly id: string }[];
+  readonly items: readonly QueryTubeSearchRunSummaryDto[];
 }
 
 function invalid(path: string, expected: string): never {
@@ -32,6 +46,22 @@ function array(value: unknown, path: string): unknown[] {
 
 function string(value: unknown, path: string): string {
   if (typeof value !== 'string') invalid(path, 'a string');
+  return value;
+}
+
+function nullableString(value: unknown, path: string): string | null {
+  return value === undefined || value === null ? null : string(value, path);
+}
+
+function count(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) invalid(path, 'a nonnegative safe integer');
+  return value;
+}
+
+function status(value: unknown, path: string): QueryTubeSearchRunSummaryDto['status'] {
+  if (value !== 'running' && value !== 'completed' && value !== 'partial' && value !== 'failed') {
+    invalid(path, 'running, completed, partial, or failed');
+  }
   return value;
 }
 
@@ -62,7 +92,20 @@ export function parseSearchRunList(value: unknown): QueryTubeSearchRunListDto {
   return {
     items: array(data.items, 'items').map((item, index) => {
       const path = `items[${index}]`;
-      return { id: string(object(item, path).id, `${path}.id`) };
+      const summary = object(item, path);
+      return {
+        id: string(summary.id, `${path}.id`),
+        querySetId: nullableString(summary.querySetId, `${path}.querySetId`),
+        querySetName: nullableString(summary.querySetName, `${path}.querySetName`),
+        status: status(summary.status, `${path}.status`),
+        queryCount: count(summary.queryCount, `${path}.queryCount`),
+        successfulQueries: count(summary.successfulQueries, `${path}.successfulQueries`),
+        failedQueries: count(summary.failedQueries, `${path}.failedQueries`),
+        totalResults: count(summary.totalResults, `${path}.totalResults`),
+        startedAt: string(summary.startedAt, `${path}.startedAt`),
+        completedAt: nullableString(summary.completedAt, `${path}.completedAt`),
+        createdAt: string(summary.createdAt, `${path}.createdAt`),
+      };
     }),
   };
 }

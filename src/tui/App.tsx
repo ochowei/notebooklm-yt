@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { ClientError } from '../application/errors.js';
 import { ChoiceList } from './components/ChoiceList.js';
+import { SearchRunList } from './components/SearchRunList.js';
 import { Report } from './screens/Report.js';
 import { displayText, errorCode, friendlyError } from './presentation.js';
 import type { BrowserState, TuiDependencies, TuiState } from './state.js';
@@ -135,42 +136,42 @@ export function App({ userId, createDependencies }: AppProps) {
 
   return <Box flexDirection="column" paddingBottom={1}>
     <Text bold>nlyt — Interactive import</Text>
-    <Text>QueryTube: {ready ? 'ready (list succeeded)' : 'not yet ready'} · NotebookLM: checked during import</Text>
-    {state.screen === 'loading' && <><Text>{state.label}</Text><Text>{state.back ? 'Esc Back · ' : ''}q Quit</Text></>}
+    <Text dimColor>QueryTube: {ready ? 'ready (list succeeded)' : 'not yet ready'} · NotebookLM: checked during import</Text>
+    {state.screen === 'loading' && <><Text>{state.label}</Text><Text dimColor>{state.back ? 'Esc Back · ' : ''}q Quit</Text></>}
     {state.screen === 'search-runs' && <>
       <Text bold>QueryTube Search Runs</Text>
-      {state.runs.length ? <ChoiceList labels={state.runs.map(run => run.searchRunId)} index={state.runIndex} />
+      {state.runs.length ? <SearchRunList runs={state.runs} index={state.runIndex} />
         : <Text>No public Search Runs found.</Text>}
-      <Text>↑↓ Navigate · Enter Select · q Quit</Text>
+      <Text dimColor>↑↓ Navigate · Enter Select · q Quit</Text>
     </>}
     {state.screen === 'videos' && <>
       <Text bold>Videos — {displayText(state.draft.run.searchRunId)}</Text>
       <ChoiceList labels={state.draft.run.videos.map(video =>
         `[${state.draft.selected.has(video.videoId) ? 'x' : ' '}] ${video.title || video.videoId}`)} index={state.draft.videoIndex} />
-      <Text>↑↓ Navigate · Space Toggle · a Select all · n Select none</Text>
-      <Text>Enter Continue · Esc Back · q Quit</Text>
+      <Text dimColor>↑↓ Navigate · Space Toggle · a Select all · n Select none</Text>
+      <Text dimColor>Enter Continue · Esc Back · q Quit</Text>
     </>}
     {state.screen === 'title' && <>
       <Text bold>Notebook title</Text><Text>{'> '}{displayText(state.draft.title)}▌</Text>
-      <Text>Type / paste title · Backspace Delete last character · Enter Continue · Esc Back · Ctrl+C Quit</Text>
+      <Text dimColor>Type / paste title · Backspace Delete last character · Enter Continue · Esc Back · Ctrl+C Quit</Text>
     </>}
     {state.screen === 'confirm' && <>
       <Text bold>Ready to import</Text>
       <Text>Search Run: {displayText(state.draft.run.searchRunId)}</Text>
       <Text>Selected: {state.draft.selected.size} / {state.draft.run.videos.length} videos</Text>
       <Text>Notebook: {displayText(state.draft.title)}</Text>
-      <Text>Enter Import · Esc Back · q Quit</Text>
+      <Text dimColor>Enter Import · Esc Back · q Quit</Text>
     </>}
-    {(state.screen === 'videos' || state.screen === 'title') && state.draft.notice && <Text>{state.draft.notice}</Text>}
+    {(state.screen === 'videos' || state.screen === 'title') && state.draft.notice && <Text color="yellow">{state.draft.notice}</Text>}
     {state.screen === 'importing' && <>
       <Text bold>Importing...</Text><Text>Creating notebook and importing selected YouTube sources.</Text>
-      <Text>Import in progress. Exiting cannot safely cancel the operation.</Text>
+      <Text color="yellow">Import in progress. Exiting cannot safely cancel the operation.</Text>
     </>}
     {state.screen === 'report' && <Report result={state.result} />}
     {state.screen === 'error' && <>
-      <Text bold>{state.code}</Text><Text>{friendlyError(state.code)}</Text>
-      {state.code.startsWith('NOTEBOOKLM_') && <Text>If a write was not confirmed, inspect the target notebook before importing again.</Text>}
-      <Text>{state.back ? 'Esc Back to Search Runs · ' : ''}q Quit</Text>
+      <Text bold color="red">{state.code}</Text><Text color="red">{friendlyError(state.code)}</Text>
+      {state.code.startsWith('NOTEBOOKLM_') && <Text color="yellow">If a write was not confirmed, inspect the target notebook before importing again.</Text>}
+      <Text dimColor>{state.back ? 'Esc Back to Search Runs · ' : ''}q Quit</Text>
     </>}
   </Box>;
 }

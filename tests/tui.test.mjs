@@ -9,13 +9,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { render } from 'ink-testing-library';
+import { summaryDto, internalSummary } from './helpers/fixtures.mjs';
+import { formatStartedAt, searchRunStatus } from '../dist/tui/presentation.js';
+import { SearchRunList } from '../dist/tui/components/SearchRunList.js';
 import { App } from '../dist/tui/App.js';
 import { ImportSearchRunToNotebook } from '../dist/application/import-search-run-to-notebook.js';
 import { ClientError } from '../dist/application/errors.js';
 
 const keys = { down: '\u001b[B', up: '\u001b[A', enter: '\r', esc: '\u001b', backspace: '\u007f' };
 const userId = 'user-1';
-const runs = ['run-1', 'run-2'].map(searchRunId => ({ userId, searchRunId }));
+const runs = ['run-1', 'run-2'].map(searchRunId => internalSummary(userId, {
+  ...summaryDto, id: searchRunId, querySetName: `WoW Forever Multilingual ${searchRunId}`,
+}));
 const videos = ['a', 'b', 'c'].map(videoId => ({ videoId, title: `Video ${videoId}`, url: `https://youtube.test/${videoId}` }));
 const secret = 'secret stderr cookie /credential/path traceback';
 const context = { clock: () => new Date('2026-10-04T08:09:31.123Z'), generateId: () => 'NLYT-A83K2F' };
@@ -105,11 +110,11 @@ test('list navigation fetches only the selected detail; video shortcuts and Back
   await ui.screen('QueryTube Search Runs');
   assert.deepEqual(ui.calls.list, [userId]);
   assert.deepEqual(ui.calls.get, []);
-  assert.match(ui.frame(), /> run-1/);
+  assert.match(ui.frame(), /> .*WoW Forever Multilingual run-1/);
   await ui.key(keys.down);
-  assert.match(ui.frame(), /> run-2/);
+  assert.match(ui.frame(), /> .*WoW Forever Multilingual run-2/);
   await ui.key(keys.up);
-  assert.match(ui.frame(), /> run-1/);
+  assert.match(ui.frame(), /> .*WoW Forever Multilingual run-1/);
   await ui.key(keys.down);
   await ui.key(keys.enter);
   await ui.screen('Videos — run-2');
@@ -131,7 +136,7 @@ test('list navigation fetches only the selected detail; video shortcuts and Back
   assert.deepEqual(ui.calls.execute, []);
   await ui.key(keys.esc);
   await ui.screen('QueryTube Search Runs');
-  assert.match(ui.frame(), /> run-2/);
+  assert.match(ui.frame(), /> .*WoW Forever Multilingual run-2/);
   assert.equal(ui.calls.list.length, 1);
 });
 
@@ -417,6 +422,7 @@ test('long failure report retains counts and scrolls to every failed video', asy
   await ui.key(keys.enter);
   await ui.screen('Import complete — failure');
   for (let index = 0; index < 29; index++) await ui.key(keys.down);
+  await ui.screen('> failed-29 — NOTEBOOKLM_BACKEND_ERROR');
   assert.match(ui.frame(), /> failed-29 — NOTEBOOKLM_BACKEND_ERROR/);
   assert.match(ui.frame(), /failed: 30/);
   assert.match(ui.frame(), /Import complete — failure/);
@@ -435,4 +441,70 @@ test('detail failure returns to the list; terminal controls in domain labels are
   await selectRun(labels);
   assert.match(labels.frame(), /Redtitle/);
   assert.doesNotMatch(labels.frame(), /\[31m|\[0m/);
+});
+
+test('date formatting uses an explicit zone deterministically and handles invalid strings', () => {
+  assert.equal(formatStartedAt('2026-10-04T09:32:00Z', 'Asia/Taipei'), '10/04 17:32');
+  assert.equal(formatStartedAt('2026-10-04T09:32:00Z', 'UTC'), '10/04 09:32');
+  assert.equal(formatStartedAt('2026-10-04T16:00:00Z', 'Asia/Taipei'), '10/05 00:00');
+  assert.equal(formatStartedAt('invalid', 'UTC'), 'Unknown date');
+});
+
+test('status semantics stay in presentation without ANSI snapshots', () => {
+  assert.deepEqual(['completed', 'partial', 'failed', 'running'].map(status => searchRunStatus(status).color),
+    ['green', 'yellow', 'red', 'cyan']);
+});
+
+test('richer rows retain identity even with duplicate names and use fallback for absent names', async t => {
+  const metadata = { ...summaryDto, startedAt: '2026-10-04T09:32:00Z', totalResults: 126, queryCount: 18 };
+  const ui = mount(t, { runs: [
+    internalSummary(userId, { ...metadata, id: 'first', querySetName: 'Same name' }),
+    internalSummary(userId, { ...metadata, id: 'second', querySetName: 'Same name', status: 'partial' }),
+    internalSummary(userId, { ...metadata, id: 'third', querySetName: null }),
+  ] });
+  await ui.screen('QueryTube Search Runs');
+  assert.match(ui.frame(), new RegExp(formatStartedAt(metadata.startedAt)));
+  assert.match(ui.frame(), /Same name/);
+  assert.match(ui.frame(), /126 results · 18 queries/);
+  assert.match(ui.frame(), /✓ completed/);
+  assert.match(ui.frame(), /! partial/);
+  assert.match(ui.frame(), /Unnamed Search Run/);
+  assert.doesNotMatch(ui.frame(), /null|undefined/);
+  await ui.key(keys.down);
+  await ui.key(keys.enter);
+  await ui.screen('Videos — second');
+  assert.deepEqual(ui.calls.get, [[userId, 'second']]);
+});
+
+test('long Search Run lists keep the focused row visible', async t => {
+  const ui = mount(t, { runs: Array.from({ length: 30 }, (_, i) =>
+    internalSummary(userId, { ...summaryDto, id: `run-${i}`, querySetName: `Set ${i}` })) });
+  await ui.screen('QueryTube Search Runs');
+  for (let i = 0; i < 29; i++) await ui.key(keys.down);
+  await ui.screen('30 / 30');
+  assert.match(ui.frame(), /> .*Set 29/);
+  assert.match(ui.frame(), /run-29/);
+  assert.match(ui.frame(), /30 \/ 30/);
+  await ui.key(keys.enter);
+  await ui.screen('Videos — run-29');
+  assert.deepEqual(ui.calls.get, [[userId, 'run-29']]);
+});
+
+test('narrow Search Run rows truncate long names and keep the selection and ID visible', async t => {
+  const app = render(createElement(SearchRunList, { runs: [internalSummary(userId, {
+    ...summaryDto, querySetName: '\u001b[31m' + '很長的名稱'.repeat(50) + '\u001b[0m',
+  })], index: 0 }));
+  t.after(() => { app.unmount(); app.cleanup(); });
+  Object.defineProperty(app.stdout, 'columns', { value: 40 });
+  app.stdout.emit('resize');
+  app.rerender(createElement(SearchRunList, { runs: [internalSummary(userId, {
+    ...summaryDto, querySetName: '\u001b[31m' + '很長的名稱'.repeat(50) + '\u001b[0m',
+  })], index: 0 }));
+  await delay(50);
+  const frame = app.lastFrame();
+  assert.match(frame, /> /);
+  assert.match(frame, /run-1/);
+  assert.doesNotMatch(frame, /\[31m|\[0m/);
+  assert.equal(frame.split('\n').length, 3);
+  assert.ok(frame.split('\n').every(line => Array.from(line).length <= 40));
 });
