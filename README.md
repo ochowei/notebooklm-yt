@@ -125,8 +125,12 @@ npm start -- --help
 | `npm run check` | 依序執行 lint、typecheck、test（含 build） |
 
 已納入 `package-lock.json`；需要依 lockfile 重現安裝時可使用 `npm ci`。
-目前只有開發依賴，尚未安裝 `notebooklm-js`。runtime validation 使用小型
-TypeScript parser，沒有新增 runtime dependency。所有自動測試使用 mock HTTP
+目前正式 dependency 只有開發工具；NotebookLM backend 已選定為 `notebooklm-py`，
+但 CLI 尚未安裝為正式 project dependency。Authentication/session 與
+list/create/YouTube/session persistence live validation 均已完成。預計由 TypeScript
+infrastructure adapter 使用 Node.js `execFile` 呼叫 CLI。選型證據與風險記錄於
+[`docs/notebooklm-integration-evaluation.md`](docs/notebooklm-integration-evaluation.md)。
+runtime validation 使用小型 TypeScript parser，沒有新增 runtime dependency。所有自動測試使用 mock HTTP
 responses；CLI 子程序使用 test-only fetch preload，不存取 QueryTube 或 Firebase。
 
 ## 目錄與邊界
@@ -139,7 +143,7 @@ src/
 │   └── notebook-provider.ts # NotebookProvider
 ├── infrastructure/
 │   ├── querytube/            # HTTP client、runtime contract DTO、mapper
-│   └── notebooklm/           # 預留 notebooklm-js adapter
+│   └── notebooklm/           # 預留 NotebookProvider adapter（選型見 docs）
 ├── cli/                     # nlyt search-runs list/get 與說明
 └── web/                     # 預留 local Web UI 與本機 server
 tests/                       # client、contract、mapper 與編譯後 CLI 測試
@@ -152,8 +156,8 @@ tests/                       # client、contract、mapper 與編譯後 CLI 測�
   `getSearchRun(userId, runId)`、穩定 error codes，以及
   `NotebookProvider.createNotebook()` / `addYouTubeSource()`。未來 use case
   透過傳入這兩個介面實作協調流程，不直接依賴 SDK 或 QueryTube DTO。
-- `infrastructure/` 將外部資料與 SDK 型別轉換成 domain 型別。
-  `notebooklm-js` 的依賴、呼叫與 session 處理限定在 NotebookLM adapter。
+- `infrastructure/` 將外部資料與 SDK/CLI 型別轉換成 domain 型別。
+  NotebookLM backend 的 dependency、呼叫與 session 處理限定在 adapter。
 - CLI 與本機 Web server 負責組裝 adapter、接收輸入並呼叫同一組 application
   use case。選取、匯入與結果彙整流程不寫在 UI layer。
 
@@ -181,12 +185,13 @@ API DTO 保留影片原始順序與 duplicates；internal `ImportSource` 以 `vi
 QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不修改 DTO。
 
 本機資料與未來 session 資料可放在 `.local/`、`.notebooklm/` 或 `.env`；
-這些位置已加入 `.gitignore`。目前尚未建立 session 儲存機制。
+這些位置已加入 `.gitignore`。本機 live evaluation 的 CLI session 位於 `.local/`；
+正式 adapter 的 session/profile 設定尚未實作。
 
 ## 尚未完成
 
 - 影片選取、共用匯入 use case 與匯入報告。
-- 使用 `notebooklm-js` 的 NotebookLM adapter 與本機 session 設定。
+- 正式 `NotebookProvider` adapter（backend 已選定，尚未實作）。
 - 真正的 CLI 匯入命令與完整 local Web UI。
 
 本階段不實作 Cloud Run deployment、多使用者 authentication 或完整
@@ -194,4 +199,7 @@ NotebookLM workflow，也未引入 DDD framework 或 DI container。
 
 ## 下一個最小 milestone
 
-整合 `notebooklm-js` authentication / Notebook Provider；尚未開始實作。
+開始實作正式 `NotebookProvider` adapter：由 TypeScript infrastructure 的
+`NotebookLmCliProvider` 使用 Node.js `execFile` 呼叫 `notebooklm-py` CLI。Live
+authentication/session、list/create/YouTube、UI confirmation 與跨 process reuse
+均已通過；選型證據見 [backend evaluation](docs/notebooklm-integration-evaluation.md)。
