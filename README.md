@@ -35,7 +35,7 @@ nlyt search-runs list --user USER_ID
 nlyt import search-run RUN_ID --user USER_ID --title "My research"
 ```
 
-發布前可用本機 tarball 安裝：`npm install -g /path/to/notebooklm-yt-0.1.0.tgz`。
+發布前可用本機 tarball 安裝：`npm install -g /path/to/notebooklm-yt-0.2.0.tgz`。
 在執行指令的工作目錄自行建立 `.env` 並設定 `QUERYTUBE_BASE_URL`，或設定同名
 環境變數；npm package 不包含 `.env`、session、source 或 tests。
 
@@ -161,7 +161,7 @@ npm start -- --help
 
 Build 會先清除 `dist/` 再編譯，保留 CLI shebang 並設定 entry point 為 executable。
 `files` whitelist 只納入 `dist/**/*.js`；npm 另自動納入 `package.json` 與 README
-（未來若新增 LICENSE，也會自動納入）。開發腳本、tests、原始碼與本機設定不打包。
+與 LICENSE。開發腳本、tests、原始碼與本機設定不打包。
 打包前需要先 `npm ci` 安裝開發工具；tarball 安裝使用已編譯的 JavaScript，
 不需要 TypeScript 或開發工具，也不會執行 `prepack`。請勿用 `--ignore-scripts`
 跳過打包前驗證。發布前可用暫存 prefix 安裝 tarball，再直接執行 `nlyt --help`。
