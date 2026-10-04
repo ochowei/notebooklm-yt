@@ -1,9 +1,16 @@
 {
   "name": "notebooklm-yt",
   "version": "0.1.0",
-  "private": true,
   "description": "A local-first tool for importing selected QueryTube YouTube results into NotebookLM.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ochowei/notebooklm-yt.git"
+  },
+  "license": "UNLICENSED",
   "type": "module",
+  "files": [
+    "dist/**/*.js"
+  ],
   "bin": {
     "nlyt": "dist/cli/index.js"
   },
@@ -11,12 +18,13 @@
     "node": "^22.13.0 || >=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
     "start": "node dist/cli/index.js",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test",
+    "prepack": "npm run check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

@@ -23,7 +23,39 @@ CLI 與未來 local Web UI 呼叫同一組 application use case，並透過
 標準化、NotebookProvider adapter，以及匯入全部 internal sources 的 application
 use case 與 CLI import workflow；影片選取尚未實作。
 
-## QueryTube v1 CLI
+## npm 安裝與 prerequisites
+
+`nlyt` 是 Node/npm CLI，npm package 名稱為 `notebooklm-yt`。需要 Node.js
+22.13 以上的 22.x，或 Node.js 24 以上，以及 npm。發布至 npm 後可安裝：
+
+```sh
+npm install -g notebooklm-yt
+nlyt --help
+nlyt search-runs list --user USER_ID
+nlyt import search-run RUN_ID --user USER_ID --title "My research"
+```
+
+發布前可用本機 tarball 安裝：`npm install -g /path/to/notebooklm-yt-0.1.0.tgz`。
+在執行指令的工作目錄自行建立 `.env` 並設定 `QUERYTUBE_BASE_URL`，或設定同名
+環境變數；npm package 不包含 `.env`、session、source 或 tests。
+
+讀取 QueryTube Search Run 只需要 Node.js 與有效的 QueryTube base URL。
+匯入 NotebookLM 另需 **Python >=3.10 與獨立安裝的 `notebooklm-py` /
+NotebookLM CLI backend**；目前 adapter contract 已驗證的版本為 `0.8.4`。
+請依 [NotebookLM adapter setup](https://github.com/ochowei/notebooklm-yt/blob/main/src/infrastructure/notebooklm/README.md)
+安裝 backend、準備 browser（若登入需要）並手動登入。
+預設從 PATH 呼叫 `notebooklm`；可透過 `NOTEBOOKLM_CLI_PATH` 指定 executable、
+`NOTEBOOKLM_STORAGE_PATH` 指定既有 session 的絕對路徑，以及
+`NOTEBOOKLM_TIMEOUT_MS` 設定 timeout（預設 60000）。
+
+NotebookLM authentication/session 由該 backend 管理，不屬於 npm package
+安裝流程。`nlyt` 不透過 `postinstall` 安裝 Python、`notebooklm-py` 或執行
+NotebookLM login；`nlyt --help` 不需要 backend、QueryTube 設定或登入 session。
+
+Package 目前標示 `UNLICENSED`，尚未授予開源授權；正式發布前由維護者確認
+授權政策，若採用開源授權，需更新 metadata 並補上對應 LICENSE。
+
+## 從原始碼安裝與 QueryTube v1 CLI
 
 ```sh
 npm ci
@@ -126,14 +158,22 @@ npm start -- --help
 | `npm run typecheck` | TypeScript strict 型別檢查，不產生檔案 |
 | `npm test` | 先 build，再以 Node 內建 test runner 執行 client、contract、mapper 與 CLI tests |
 | `npm run check` | 依序執行 lint、typecheck、test（含 build） |
+| `npm pack --dry-run` / `npm pack` | 自動透過 `prepack` 執行完整 check，通過後預覽／產生 npm tarball |
+
+Build 會先清除 `dist/` 再編譯，保留 CLI shebang 並設定 entry point 為 executable。
+`files` whitelist 只納入 `dist/**/*.js`；npm 另自動納入 `package.json` 與 README
+（未來若新增 LICENSE，也會自動納入）。開發腳本、tests、原始碼與本機設定不打包。
+打包前需要先 `npm ci` 安裝開發工具；tarball 安裝使用已編譯的 JavaScript，
+不需要 TypeScript 或開發工具，也不會執行 `prepack`。請勿用 `--ignore-scripts`
+跳過打包前驗證。發布前可用暫存 prefix 安裝 tarball，再直接執行 `nlyt --help`。
 
 已納入 `package-lock.json`；需要依 lockfile 重現安裝時可使用 `npm ci`。
 目前正式 dependency 只有開發工具；NotebookLM backend 已選定為 `notebooklm-py`，
 CLI 是獨立安裝的 Python runtime dependency。Authentication/session 與
 list/create/YouTube/session persistence live validation 均已完成。TypeScript
 infrastructure adapter 已使用 Node.js `execFile` 呼叫 CLI；設定與登入 setup 見
-[NotebookLM adapter README](src/infrastructure/notebooklm/README.md)。選型證據與風險記錄於
-[`docs/notebooklm-integration-evaluation.md`](docs/notebooklm-integration-evaluation.md)。
+[NotebookLM adapter README](https://github.com/ochowei/notebooklm-yt/blob/main/src/infrastructure/notebooklm/README.md)。選型證據與風險記錄於
+[`docs/notebooklm-integration-evaluation.md`](https://github.com/ochowei/notebooklm-yt/blob/main/docs/notebooklm-integration-evaluation.md)。
 runtime validation 使用小型 TypeScript parser，沒有新增 runtime dependency。HTTP 自動測試使用 mock responses；CLI 子程序使用 test-only fetch preload。
 NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
 所有自動測試不存取 QueryTube、Firebase 或 NotebookLM。
@@ -260,7 +300,7 @@ node dist/cli/index.js import search-run RUN_ID --user USER_ID --title "nlyt imp
 CLI 自動載入 cwd `.env`，既有環境變數優先；QueryTube configuration 同上。
 NotebookLM 需要獨立安裝的 CLI 及既有 authentication session，可用
 `NOTEBOOKLM_CLI_PATH`、`NOTEBOOKLM_STORAGE_PATH`、`NOTEBOOKLM_TIMEOUT_MS` 設定，
-預設與人工登入 setup 見 [adapter README](src/infrastructure/notebooklm/README.md)。
+預設與人工登入 setup 見 [adapter README](https://github.com/ochowei/notebooklm-yt/blob/main/src/infrastructure/notebooklm/README.md)。
 不會自動登入 Google。
 
 Composition 為 CLI → `ImportSearchRunToNotebook(QueryTubeHttpClient,
