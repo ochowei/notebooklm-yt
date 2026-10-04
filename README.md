@@ -6,7 +6,7 @@
 目前已實作 QueryTube Public API v1 Search Run client、runtime validation、
 最小匯入模型、`nlyt search-runs list/get`，以及以 `notebooklm-py` CLI 為 backend
 的 `NotebookLmCliProvider`，以及 Search Run → NotebookLM application use case。
-正式提供 `nlyt import search-run` CLI workflow。
+正式提供 `nlyt import search-run` CLI workflow 與 `nlyt tui` 互動式介面。
 
 ## 預計 workflow
 
@@ -18,7 +18,7 @@ QueryTube Search Run
   → NotebookLM notebook 與 YouTube sources
 ```
 
-CLI 與未來 local Web UI 呼叫同一組 application use case，並透過
+CLI、TUI 與未來 local Web UI 呼叫同一組 application use case，並透過
 `NotebookProvider` 匯入新建的 notebook。目前提供 Search Run 讀取與
 標準化、NotebookProvider adapter，以及支援影片選取與 Import Report 的共用
 application use case 與非互動式 CLI import workflow。
@@ -167,13 +167,14 @@ Build 會先清除 `dist/` 再編譯，保留 CLI shebang 並設定 entry point 
 跳過打包前驗證。發布前可用暫存 prefix 安裝 tarball，再直接執行 `nlyt --help`。
 
 已納入 `package-lock.json`；需要依 lockfile 重現安裝時可使用 `npm ci`。
-目前正式 dependency 只有開發工具；NotebookLM backend 已選定為 `notebooklm-py`，
+TUI runtime dependencies 為 Ink 8 與 React 19；型別與互動測試使用
+`@types/react`、`ink-testing-library`。NotebookLM backend 已選定為 `notebooklm-py`，
 CLI 是獨立安裝的 Python runtime dependency。Authentication/session 與
 list/create/YouTube/session persistence live validation 均已完成。TypeScript
 infrastructure adapter 已使用 Node.js `execFile` 呼叫 CLI；設定與登入 setup 見
 [NotebookLM adapter README](https://github.com/ochowei/notebooklm-yt/blob/main/src/infrastructure/notebooklm/README.md)。選型證據與風險記錄於
 [`docs/notebooklm-integration-evaluation.md`](https://github.com/ochowei/notebooklm-yt/blob/main/docs/notebooklm-integration-evaluation.md)。
-runtime validation 使用小型 TypeScript parser，沒有新增 runtime dependency。HTTP 自動測試使用 mock responses；CLI 子程序使用 test-only fetch preload。
+runtime validation 使用小型 TypeScript parser，不依賴外部 validation library。HTTP 自動測試使用 mock responses；CLI 子程序使用 test-only fetch preload。
 NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
 所有自動測試不存取 QueryTube、Firebase 或 NotebookLM。
 
@@ -189,7 +190,8 @@ src/
 ├── infrastructure/
 │   ├── querytube/            # HTTP client、runtime contract DTO、mapper
 │   └── notebooklm/           # NotebookLmCliProvider、runner、config、runtime contract
-├── cli/                     # nlyt search-runs list/get、import search-run 與結果呈現
+├── cli/                     # commands、adapter composition 與非互動式結果呈現
+├── tui/                     # Ink screens、keyboard、presentation state 與 Import Report
 └── web/                     # 預留 local Web UI 與本機 server
 tests/                       # client、contract、mapper 與編譯後 CLI 測試
 ```
@@ -203,7 +205,7 @@ tests/                       # client、contract、mapper 與編譯後 CLI 測�
   透過傳入這兩個介面實作協調流程，不直接依賴 SDK 或 QueryTube DTO。
 - `infrastructure/` 將外部資料與 SDK/CLI 型別轉換成 domain 型別。
   NotebookLM backend 的 dependency、呼叫與 session 處理限定在 adapter。
-- CLI 與本機 Web server 負責組裝 adapter、接收輸入並呼叫同一組 application
+- CLI entry point 負責組裝 adapter；CLI、TUI 與未來本機 Web server 接收輸入並呼叫同一組 application
   use case。選取、匯入與結果彙整流程不寫在 UI layer。
 
 QueryTube 的 DTO、驗證與 mapper 都限定在 `infrastructure/querytube/`：
@@ -303,6 +305,83 @@ application/domain architecture boundary。自動測試使用 fakes，不做外�
 本階段不實作 Cloud Run deployment、多使用者 authentication 或完整
 NotebookLM workflow，也未引入 DDD framework 或 DI container。
 
+## Interactive TUI
+
+```sh
+nlyt tui --user USER_ID
+nlyt tui --help
+# 未 npm link 時：
+node dist/cli/index.js tui --user USER_ID
+```
+
+`--user` 必填，與 `search-runs list/get` 使用相同 owner UID。需要互動式 terminal
+（stdin/stdout TTY）；不支援 TUI `--json`、`--title` 或 `--video`，這些 automation
+用途繼續使用 `nlyt import search-run`。Help 不需要 config、backend 或 auth。
+與 CLI 相同，從目前工作目錄 `.env` / environment 讀取 `QUERYTUBE_BASE_URL`，
+既有 environment 優先；NotebookLM 的 executable、storage 與 timeout 設定同上，
+需要獨立安裝 backend 並預先人工登入。不新增設定檔或 persistence。
+
+```text
+Loading Search Runs
+→ Search Runs → Select Run → Select Videos
+→ Notebook Title → Confirm → Importing → Import Report
+```
+
+讀取／匯入錯誤顯示 stable code 與友善訊息，不呈現 raw backend message、stderr、
+stack、credential 或 storage path。空列表顯示 `No public Search Runs found.`；
+空 run 顯示既有 `IMPORT_NO_SOURCES`，不建立 notebook。影片預設全選，空選取會
+留在選片畫面要求至少選一支；空 title 也不進入確認畫面。
+
+| 按鍵 | 行為 |
+| --- | --- |
+| ↑ / ↓ | 選擇 Search Run／影片，或瀏覽報告失敗項目；長列表保持目前項目可見 |
+| Space | 切換目前影片 |
+| a / n | 全選／全不選影片 |
+| Enter | 選擇 run／下一步；確認畫面才開始 import；報告返回 Search Runs |
+| Esc | 返回前一畫面；detail loading、error 或 report 返回已載入的 Search Runs |
+| q | 退出（title 畫面視為文字；importing 畫面無作用） |
+| Ctrl+C | Terminal emergency termination，包括 title／importing 畫面 |
+| 文字／貼上、Backspace | 輸入 title／刪除最後一個字元，保留空白與 Unicode |
+
+Importing 只提供整體狀態，不提供逐 source live progress；此時 q、Esc、Enter 與
+其他正常 navigation shortcuts 均無作用，不會離開畫面、取消 operation 或啟動
+第二次 import。完成後才進入 report 或既有 error handling。
+
+Ctrl+C 保留作為 terminal emergency termination。若透過 Ctrl+C 或外部方式強制
+終止 process，NotebookLM write 狀態可能無法確認；不要假設 operation 已取消，
+重新執行前應先確認 target NotebookLM 狀態。沒有 cancellation、retry 或 rollback。
+TUI session 正常退出使用一般正常 exit，report 的業務 status 仍顯示
+`success`／`partial_failure`／`failure`；automation 的 exit codes 應使用 CLI。
+
+TUI 的 `src/tui/state.ts` 以明確的 screen union 管理 navigation。App 只依賴
+application ports 與 domain models：啟動呼叫 `QueryTubeClient.listSearchRuns(userId)`，
+選定 run 才呼叫 `getSearchRun(userId, runId)`，不預載全部 details。Back 使用已載入
+的 list；完成匯入按 Enter 同樣返回該 list，不自動 retry 或 refresh。
+
+TUI 只保存 `Set<videoId>` 的選片狀態，確認後原樣傳入共用
+`ImportSearchRunToNotebook.execute({ userId, searchRunId, notebookTitle,
+selection: { videoIds } })`。該 use case 依既有 contract 再讀一次最新 detail 並驗證
+選片，不使用 UI cache 繞過 application。ID validation、canonical order、duplicate
+policy、skipped semantics、Import ID 與 title timestamp suffix 都留在既有層；TUI
+不產生 identification、不重寫匯入 loop。Report 直接用 application result 的
+notebook、source error codes，以及 `summarizeImportSources()` 的 status / counts；
+未選取的 skipped 不算 failure。
+
+Readiness 保持最小：第一次 list 成功後 QueryTube 顯示 ready；NotebookLM adapter
+只在確認匯入後建立，由既有 stable config/auth errors 呈現問題。啟動不探測私人
+notebooks、不登入、不建立 notebook，也不新增 provider method。TUI 提供人工確認
+流程；CLI 維持可 script／automation 的 contract，`nlyt import search-run` 的參數、
+JSON schema 與 exit semantics 不變。TUI、CLI 與未來 Web UI 共用 application workflow。
+
+`tests/tui.test.mjs` 使用 Ink testing library 與 fake application dependencies
+測 keyboard/workflow、confirmation、exact application input、成功／部分失敗／
+全失敗含 skipped、empty/error、退出、late async completion 與長列表。另以 mocked
+HTTP、fake backend executable 走編譯後 `nlyt tui` smoke，驗證確認前零 backend
+呼叫、匯入後 q 退出，並執行原有 CLI regression tests；不做真實 NotebookLM write。
+
+本版不包含逐 source progress、notebook browser／delete／edit／rename、login UI、
+query editing、fuzzy search、mouse、theme、persistent settings、Web UI 或 release automation。
+
 ## CLI Import Workflow
 
 ```sh
@@ -380,7 +459,7 @@ fatal errors、兩種輸出、exit codes、safe diagnostics，並確認沒有 re
 Live validation 另行執行上述 CLI，使用真實 API、CLI executable、既有 session，
 選小型公開 run 並記錄結果；session 缺失/過期時以 `NOTEBOOKLM_AUTH_REQUIRED`
 回報，backend 未安裝以 `NOTEBOOKLM_CONFIG_INVALID` 回報，不自動登入或重試。
-影片選取、完整 Import Report 與 Web UI 仍屬後續 scope。
+影片選取與完整 Import Report 已完成；完整 Web UI 仍屬後續 scope。
 
 ### Import identification
 

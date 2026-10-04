@@ -14,6 +14,7 @@ Usage:
   nlyt search-runs list --user <userId> [--json]
   nlyt search-runs get <runId> --user <userId> [--json]
   nlyt import search-run <runId> --user <userId> --title <notebookTitle> [--video <videoId> ...] [--json]
+  nlyt tui --user <userId>
   nlyt --help
 
 Set QUERYTUBE_BASE_URL in .env (current directory) or your environment.
@@ -21,6 +22,17 @@ Reads QueryTube Public API v1 and returns normalized import sources.
 Import requires the separately installed NotebookLM CLI and an existing auth session.
 Configure NOTEBOOKLM_CLI_PATH, NOTEBOOKLM_STORAGE_PATH, NOTEBOOKLM_TIMEOUT_MS as needed.
 Import exit codes: 0 success, 1 failure, 2 partial failure.`;
+
+const tuiHelp = `Usage: nlyt tui --user <userId>
+
+Browse public Search Runs, select videos, enter a title, confirm, and view the Import Report.
+Uses cwd .env / environment configuration, just like the CLI import command.
+Requires an interactive terminal. QueryTube readiness follows the first successful list.
+NotebookLM configuration/authentication is checked during import; authenticate separately.
+↑↓ Navigate; Space Toggle; a All; n None; Enter Next/Import; Esc Back; q Quit.
+Title entry: type/paste (including q), Backspace deletes, Ctrl+C quits.
+During import, normal shortcuts are disabled. Ctrl+C may leave writes unconfirmed.
+Check the target NotebookLM state before importing again after forced termination.`;
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
@@ -40,7 +52,8 @@ try {
   });
   importing = positionals[0] === 'import';
   if (values.help || args.length === 0) {
-    console.log(json ? JSON.stringify({ help }) : help);
+    const text = positionals[0] === 'tui' ? tuiHelp : help;
+    console.log(json ? JSON.stringify({ help: text }) : text);
   } else {
     const [group, command, runId] = positionals;
     importInput = { userId: values.user, searchRunId: runId, notebookTitle: values.title,
@@ -51,34 +64,52 @@ try {
     const searchCommand = group === 'search-runs' && values.video === undefined && values.title === undefined && validId(values.user)
       && ((command === 'list' && positionals.length === 2)
         || (command === 'get' && positionals.length === 3 && validId(runId)));
-    if (!importCommand && !searchCommand) {
+    const tuiCommand = group === 'tui' && positionals.length === 1 && validId(values.user)
+      && values.title === undefined && values.video === undefined && !values.json;
+    if (!importCommand && !searchCommand && !tuiCommand) {
       throw new ClientError('CLI_INVALID_ARGUMENTS', 'Invalid arguments. Use --help for usage.');
     }
-    try {
-      loadEnvFile('.env');
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
-        throw new ClientError('QUERYTUBE_CONFIG_INVALID', 'Could not read .env in the current directory.');
+    const loadConfiguration = () => {
+      try {
+        loadEnvFile('.env');
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+          throw new ClientError('QUERYTUBE_CONFIG_INVALID', 'Could not read .env in the current directory.');
+        }
       }
-    }
-    const client = new QueryTubeHttpClient();
-    if (importCommand) {
-      const result = await new ImportSearchRunToNotebook(client, new NotebookLmCliProvider()).execute({
-        userId: values.user!, searchRunId: runId!, notebookTitle: values.title!,
-        ...(values.video === undefined ? {} : { selection: { videoIds: values.video } }),
-      });
-      const report = importReport(importInput, result);
-      console.log(json ? JSON.stringify(report) : importHumanOutput(report));
-      process.exitCode = importExitCode(report);
-    } else if (command === 'list') {
-      const items = await client.listSearchRuns(values.user!);
-      console.log(json ? JSON.stringify({ items })
-        : items.length ? items.map(item => item.searchRunId).join('\n') : 'No public Search Runs found.');
+    };
+    if (tuiCommand) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new ClientError('CLI_INVALID_ARGUMENTS', 'nlyt tui requires an interactive terminal. Use --help for usage.');
+      }
+      const { startTui } = await import('../tui/index.js');
+      await startTui({ userId: values.user!, createDependencies: () => {
+        loadConfiguration();
+        const queryTube = new QueryTubeHttpClient();
+        return { queryTube, importer: { execute: input =>
+          new ImportSearchRunToNotebook(queryTube, new NotebookLmCliProvider()).execute(input) } };
+      } });
     } else {
-      const source = await client.getSearchRun(values.user!, runId!);
-      console.log(json ? JSON.stringify(source)
-        : [`Search Run: ${source.searchRunId}`, `User: ${source.userId}`, `Videos: ${source.videos.length}`,
-          ...source.videos.map(video => `${video.videoId}\t${video.title}\t${video.url}`)].join('\n'));
+      loadConfiguration();
+      const client = new QueryTubeHttpClient();
+      if (importCommand) {
+        const result = await new ImportSearchRunToNotebook(client, new NotebookLmCliProvider()).execute({
+          userId: values.user!, searchRunId: runId!, notebookTitle: values.title!,
+          ...(values.video === undefined ? {} : { selection: { videoIds: values.video } }),
+        });
+        const report = importReport(importInput, result);
+        console.log(json ? JSON.stringify(report) : importHumanOutput(report));
+        process.exitCode = importExitCode(report);
+      } else if (command === 'list') {
+        const items = await client.listSearchRuns(values.user!);
+        console.log(json ? JSON.stringify({ items })
+          : items.length ? items.map(item => item.searchRunId).join('\n') : 'No public Search Runs found.');
+      } else {
+        const source = await client.getSearchRun(values.user!, runId!);
+        console.log(json ? JSON.stringify(source)
+          : [`Search Run: ${source.searchRunId}`, `User: ${source.userId}`, `Videos: ${source.videos.length}`,
+            ...source.videos.map(video => `${video.videoId}\t${video.title}\t${video.url}`)].join('\n'));
+      }
     }
   }
 } catch (error) {
