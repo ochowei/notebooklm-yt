@@ -3,6 +3,11 @@ import { ClientError } from '../application/errors.js';
 import type { ClientErrorCode } from '../application/errors.js';
 
 const messages: Record<ClientErrorCode, string> = {
+  SEARCH_RUN_FILE_NOT_FOUND: 'Search Run file was not found.',
+  SEARCH_RUN_FILE_READ_ERROR: 'Could not read Search Run file.',
+  SEARCH_RUN_YAML_INVALID: 'Could not parse Search Run YAML.',
+  SEARCH_RUN_SCHEMA_INVALID: 'Invalid Search Run structure.',
+  SEARCH_RUN_EMPTY: 'This Search Run has no YouTube sources to import.',
   QUERYTUBE_CONFIG_MISSING: 'Set QUERYTUBE_BASE_URL in your environment or cwd .env.',
   QUERYTUBE_CONFIG_INVALID: 'Check QUERYTUBE_BASE_URL and that cwd .env can be read.',
   QUERYTUBE_NETWORK_ERROR: 'Could not reach QueryTube. Check your connection.',

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { loadEnvFile } from 'node:process';
+import { basename, extname } from 'node:path';
 import { ClientError } from '../application/errors.js';
 import { QueryTubeHttpClient } from '../infrastructure/querytube/client.js';
 import { NotebookLmCliProvider } from '../infrastructure/notebooklm/notebook-lm-cli-provider.js';
 import { ImportSearchRunToNotebook } from '../application/import-search-run-to-notebook.js';
-import type { ImportSearchRunInput } from '../application/import-search-run-to-notebook.js';
+import { loadSearchRunFile } from '../infrastructure/search-run-file/adapter.js';
+import type { ImportReportInput } from './import-output.js';
 import { importReport, importExitCode, importHumanOutput } from './import-output.js';
 import { createTuiDependencies } from './tui-dependencies.js';
 
@@ -15,11 +17,16 @@ Usage:
   nlyt search-runs list --user <userId> [--json]
   nlyt search-runs get <runId> --user <userId> [--json]
   nlyt import search-run <runId> --user <userId> --title <notebookTitle> [--video <videoId> ...] [--json]
+  nlyt import --search-run-file <path> [--title <notebookTitle>] [--video <videoId> ...] [--json]
   nlyt tui --user <userId>
   nlyt --help
 
 Set QUERYTUBE_BASE_URL in .env (current directory) or your environment.
 Reads QueryTube Public API v1 and returns normalized import sources.
+Export/download Search Run YAML from QueryTube, then import it directly; no conversion needed.
+File import reads generated_at, summary, results[].videos[] (video_id, url, title), optional errors.
+File input is exclusive with search-run <runId> / --user; QUERYTUBE_BASE_URL is unused.
+Without --title, file import uses the filename stem; no API run ID or owner is required.
 Import requires the separately installed NotebookLM CLI and an existing auth session.
 Configure NOTEBOOKLM_CLI_PATH, NOTEBOOKLM_STORAGE_PATH, NOTEBOOKLM_TIMEOUT_MS as needed.
 Import exit codes: 0 success, 1 failure, 2 partial failure.`;
@@ -38,13 +45,14 @@ Check the target NotebookLM state before importing again after forced terminatio
 const args = process.argv.slice(2);
 const json = args.includes('--json');
 let importing = args.includes('import');
-let importInput: Partial<ImportSearchRunInput> = {};
+let importInput: ImportReportInput = {};
 
 try {
   const { values, positionals } = parseArgs({
     args, allowPositionals: true,
     options: {
       user: { type: 'string' },
+      'search-run-file': { type: 'string' },
       title: { type: 'string' },
       video: { type: 'string', multiple: true },
       json: { type: 'boolean' },
@@ -59,15 +67,20 @@ try {
     const [group, command, runId] = positionals;
     importInput = { userId: values.user, searchRunId: runId, notebookTitle: values.title,
       ...(values.video === undefined ? {} : { selection: { videoIds: values.video } }) };
+    const filePath = values['search-run-file'];
+    if (filePath !== undefined) importInput = { ...importInput, input: { type: 'yaml-file', path: filePath } };
     const validId = (value: string | undefined) => value?.trim() && !value.includes('\0') && value !== '.' && value !== '..';
-    const importCommand = group === 'import' && command === 'search-run' && positionals.length === 3
+    const fileCommand = group === 'import' && positionals.length === 1 && filePath !== undefined
+      && filePath.trim() && !filePath.includes('\0') && values.user === undefined
+      && (values.title === undefined || (values.title.trim() && !values.title.includes('\0')));
+    const importCommand = filePath === undefined && group === 'import' && command === 'search-run' && positionals.length === 3
       && validId(runId) && validId(values.user) && values.title?.trim() && !values.title.includes('\0');
-    const searchCommand = group === 'search-runs' && values.video === undefined && values.title === undefined && validId(values.user)
+    const searchCommand = filePath === undefined && group === 'search-runs' && values.video === undefined && values.title === undefined && validId(values.user)
       && ((command === 'list' && positionals.length === 2)
         || (command === 'get' && positionals.length === 3 && validId(runId)));
-    const tuiCommand = group === 'tui' && positionals.length === 1 && validId(values.user)
+    const tuiCommand = filePath === undefined && group === 'tui' && positionals.length === 1 && validId(values.user)
       && values.title === undefined && values.video === undefined && !values.json;
-    if (!importCommand && !searchCommand && !tuiCommand) {
+    if (!fileCommand && !importCommand && !searchCommand && !tuiCommand) {
       throw new ClientError('CLI_INVALID_ARGUMENTS', 'Invalid arguments. Use --help for usage.');
     }
     const loadConfiguration = () => {
@@ -90,24 +103,36 @@ try {
       } });
     } else {
       loadConfiguration();
-      const client = new QueryTubeHttpClient();
-      if (importCommand) {
-        const result = await new ImportSearchRunToNotebook(client, new NotebookLmCliProvider()).execute({
-          userId: values.user!, searchRunId: runId!, notebookTitle: values.title!,
+      if (fileCommand || importCommand) {
+        const run = fileCommand ? await loadSearchRunFile(filePath!) : undefined;
+        if (run) {
+          const stem = basename(filePath!, extname(filePath!));
+          importInput = { ...importInput, notebookTitle: values.title ?? (stem.trim() ? stem : 'Search Run') };
+        }
+        const importer = new ImportSearchRunToNotebook(
+          fileCommand ? undefined : new QueryTubeHttpClient(), new NotebookLmCliProvider(),
+        );
+        const options = {
+          notebookTitle: importInput.notebookTitle!,
           ...(values.video === undefined ? {} : { selection: { videoIds: values.video } }),
-        });
+        };
+        const result = run ? await importer.executeRun(options, run)
+          : await importer.execute({ ...options, userId: values.user!, searchRunId: runId! });
         const report = importReport(importInput, result);
         console.log(json ? JSON.stringify(report) : importHumanOutput(report));
         process.exitCode = importExitCode(report);
-      } else if (command === 'list') {
-        const items = await client.listSearchRuns(values.user!);
-        console.log(json ? JSON.stringify({ items: items.map(({ userId, searchRunId }) => ({ userId, searchRunId })) })
-          : items.length ? items.map(item => item.searchRunId).join('\n') : 'No public Search Runs found.');
       } else {
-        const source = await client.getSearchRun(values.user!, runId!);
-        console.log(json ? JSON.stringify(source)
-          : [`Search Run: ${source.searchRunId}`, `User: ${source.userId}`, `Videos: ${source.videos.length}`,
-            ...source.videos.map(video => `${video.videoId}\t${video.title}\t${video.url}`)].join('\n'));
+        const client = new QueryTubeHttpClient();
+        if (command === 'list') {
+          const items = await client.listSearchRuns(values.user!);
+          console.log(json ? JSON.stringify({ items: items.map(({ userId, searchRunId }) => ({ userId, searchRunId })) })
+            : items.length ? items.map(item => item.searchRunId).join('\n') : 'No public Search Runs found.');
+        } else {
+          const source = await client.getSearchRun(values.user!, runId!);
+          console.log(json ? JSON.stringify(source)
+            : [`Search Run: ${source.searchRunId}`, `User: ${source.userId}`, `Videos: ${source.videos.length}`,
+              ...source.videos.map(video => `${video.videoId}\t${video.title}\t${video.url}`)].join('\n'));
+        }
       }
     }
   }

@@ -6,7 +6,8 @@
 目前已實作 QueryTube Public API v1 Search Run client、runtime validation、
 最小匯入模型、`nlyt search-runs list/get`，以及以 `notebooklm-py` CLI 為 backend
 的 `NotebookLmCliProvider`，以及 Search Run → NotebookLM application use case。
-正式提供 `nlyt import search-run` CLI workflow 與 `nlyt tui` 互動式介面。
+正式提供 `nlyt import search-run` API workflow、`nlyt import --search-run-file`
+本機 YAML input，以及 `nlyt tui` 互動式介面。
 
 ## 預計 workflow
 
@@ -174,7 +175,8 @@ list/create/YouTube/session persistence live validation 均已完成。TypeScrip
 infrastructure adapter 已使用 Node.js `execFile` 呼叫 CLI；設定與登入 setup 見
 [NotebookLM adapter README](https://github.com/ochowei/notebooklm-yt/blob/main/src/infrastructure/notebooklm/README.md)。選型證據與風險記錄於
 [`docs/notebooklm-integration-evaluation.md`](https://github.com/ochowei/notebooklm-yt/blob/main/docs/notebooklm-integration-evaluation.md)。
-runtime validation 使用小型 TypeScript parser，不依賴外部 validation library。HTTP 自動測試使用 mock responses；CLI 子程序使用 test-only fetch preload。
+runtime validation 使用小型 TypeScript parser，不依賴外部 validation library；
+本機 YAML parsing 使用 `yaml` runtime dependency。HTTP 自動測試使用 mock responses；CLI 子程序使用 test-only fetch preload。
 NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
 所有自動測試不存取 QueryTube、Firebase 或 NotebookLM。
 
@@ -182,13 +184,15 @@ NotebookLM adapter 測試使用 fake runner 與本機 fixture executable，
 
 ```text
 src/
-├── domain/                  # ImportSource、SearchRunReference、SearchRunSummary、Notebook 等內部資料型別
+├── domain/                  # SearchRun、ImportSource、SearchRunReference、SearchRunSummary、Notebook 等內部資料型別
 ├── application/             # 整合介面、穩定 errors 與共用匯入 use case
 │   ├── querytube-client.ts   # QueryTubeClient
 │   ├── notebook-provider.ts # NotebookProvider
 │   └── import-search-run-to-notebook.ts # ImportSearchRunToNotebook
 ├── infrastructure/
 │   ├── querytube/            # HTTP client、runtime contract DTO、mapper
+│   ├── search-run/           # API／YAML 共用影片去重與排序
+│   ├── search-run-file/      # 本機 YAML 讀取、驗證與標準化
 │   └── notebooklm/           # NotebookLmCliProvider、runner、config、runtime contract
 ├── cli/                     # commands、adapter composition 與非互動式結果呈現
 ├── tui/                     # Ink screens、keyboard、presentation state 與 Import Report
@@ -198,8 +202,10 @@ tests/                       # client、contract、mapper 與編譯後 CLI 測�
 
 - `domain/` 只有內部資料型別，不依賴 SDK、HTTP 或 UI。`SearchRunReference`
   只保留 `userId` 與 `searchRunId`；`SearchRunSummary` 加入 Query Set 關聯、狀態、
-  query/result counts 與 ISO timestamps，供 UI 重用；`ImportSource` 加入 `{ videoId, url, title }[]`。
-  owner 一起保留，避免不同 owner 下的 opaque run ID 混淆。
+  query/result counts 與 ISO timestamps，供 UI 重用；`ImportSource` 保留必填 owner
+  與 `{ videoId, url, title }[]`。共用 `SearchRun` 只包含匯入需要的影片，
+  不要求 API owner 或 run ID。API 的 `ImportSource` 一起保留 owner／run identity，
+  避免不同 owner 下的 opaque run ID 混淆。
 - `application/` 定義 `QueryTubeClient.listSearchRuns(userId)` /
   `getSearchRun(userId, runId)`、穩定 error codes，以及
   `NotebookProvider.createNotebook()` / `addYouTubeSource()`。匯入 use case
@@ -209,7 +215,8 @@ tests/                       # client、contract、mapper 與編譯後 CLI 測�
 - CLI entry point 負責組裝 adapter；CLI、TUI 與未來本機 Web server 接收輸入並呼叫同一組 application
   use case。選取、匯入與結果彙整流程不寫在 UI layer。
 
-QueryTube 的 DTO、驗證與 mapper 都限定在 `infrastructure/querytube/`：
+QueryTube API 的 DTO、驗證與 mapping 限定在 `infrastructure/querytube/`；
+影片去重／排序由 `infrastructure/search-run/mapper.ts` 提供，API 與 YAML adapter 共用：
 
 ```text
 QueryTube v1 HTTP JSON (unknown)
@@ -236,20 +243,127 @@ QueryTube query/video 陣列順序，也不推論 relevance ranking。mapper 不
 這些位置已加入 `.gitignore`。本機 live evaluation 的 CLI session 位於 `.local/`；
 正式 adapter 支援 CLI executable、storage path 與 timeout 設定，詳見其 README。
 
+## 從本機 Search Run YAML 匯入
+
+API 與本機 YAML 是不同的 input source，標準化後共用影片選取、NotebookLM
+匯入、部分失敗處理及 Import Report。檔案模式不建立 QueryTube client、不發出
+HTTP request，也不需要 `QUERYTUBE_BASE_URL` 或 API user ID。
+
+先從 QueryTube 匯出／下載 Search Run YAML，再直接匯入；不需要轉成 API JSON
+或 internal domain schema，也不需要手動修改匯出欄位。
+
+```sh
+nlyt import --search-run-file ./youtube-search-results.yaml
+nlyt import \
+  --search-run-file ./youtube-search-results.yaml \
+  --title "WoW Forever research"
+nlyt import \
+  --search-run-file ./youtube-search-results.yaml \
+  --video VIDEO_ID_1 \
+  --video VIDEO_ID_2 \
+  --json
+# 既有 API 指令保持不變
+nlyt import search-run RUN_ID --user USER_ID --title "My research"
+```
+
+檔案路徑相對於目前工作目錄解讀（也接受絕對路徑）。`--search-run-file` 與
+`search-run RUN_ID` / `--user` 互斥；衝突在讀取檔案、載入設定或使用 backend
+之前回報 `CLI_INVALID_ARGUMENTS`。現有 CLI 使用 `--user` 與 positional `RUN_ID`，
+沒有 `--user-id`、`--search-run-id` 或 base URL flag；未知 flag 同樣拒絕。
+環境／`.env` 中的 QueryTube URL 在檔案模式忽略。NotebookLM 設定仍從目前
+工作目錄 `.env`／環境讀取，需要既有 backend 與 session；不會自動登入。
+
+目前接受 QueryTube exported Search Run 的**單一 YAML document**：
+
+```yaml
+generated_at: '2026-10-05T01:53:44.631Z'
+summary:
+  queries: 1
+  successful: 1
+  failed: 0
+  total_results: 1
+results:
+  - id: query-example
+    query: WoW Forever review
+    count: 1
+    videos:
+      - video_id: VIDEO_ID
+        title: Example video
+        channel_id: channel-example
+        channel_title: Example channel
+        published_at: '2026-09-29T09:30:30Z'
+        description: Example review
+        url: https://www.youtube.com/watch?v=VIDEO_ID
+        thumbnail_url: https://i.ytimg.com/vi/VIDEO_ID/hqdefault.jpg
+    relevance_language: zh-Hant
+    region_code: TW
+errors: []
+```
+
+`generated_at` 必須是非空且不含 NUL 的字串。`summary` 必須是 object，其中
+`queries`、`successful`、`failed`、`total_results` 皆為非負 safe integer；
+不以 summary counts 驗證影片陣列長度或去重後數量。`results` 與每個 result 的
+`videos` 必須是陣列。`errors` 可省略；提供時必須是陣列，內容不參與匯入。
+每個影片的 `video_id`、`url`、`title` 必須是字串；`video_id` / `url` 不可為空白
+或含 NUL，空 `title` 合法。不要求頂層 `id` 或 `userId`。
+不額外限制 YouTube ID 格式或 URL host。未知／未使用欄位忽略，不會附帶進入
+report；缺少必要欄位、null 或型別錯誤均拒絕。Query metadata（`id`、`query`、
+`count`、`relevance_language`、`region_code`）及影片的 channel／published／description／
+thumbnail metadata 可保留在檔案中，但不要求、不正規化，也不附帶進入 import model。
+Adapter 將 `results[].videos[].video_id` 映射為 `videoId`，保留 `title`／`url`，
+flatten query groups 後交給共用 mapper。API-style `id`／`queryResults`／`videoId`
+payload 不能取代 exported YAML 結構。重複 mapping key、多個 YAML
+documents、未知 tags 與超出 parser alias 限制的內容回報 YAML error。
+影片沿用 API 與 YAML 共用 mapper：以 `videoId` 去重、優先非空標題，再以標題／URL 字典序
+選定一筆，最後依 `videoId` 排序。省略 `--video` 匯入全部，指定 `--video`
+則沿用既有 selection validation。沒有可匯入影片時，在任何 NotebookLM 呼叫前失敗。
+
+未指定 `--title` 時使用檔名 stem 作為本機 context／display title，例如
+`youtube-search-results-v3-merged.yaml` → `youtube-search-results-v3-merged`，
+再套用既有 Import ID／時間 suffix；stem 為純空白時使用 `Search Run`。
+這個標題不作為 API Search Run ID。`--title` 仍可覆寫。
+YAML 的 JSON report 額外包含 `"input":{"type":"yaml-file","path":"./search-run.yaml"}`；
+human report 同樣顯示來源與路徑。檔案來源的 `searchRunId`／`userId` 皆為 `null`，
+即使額外 metadata 包含同名欄位也不當作 API identity。
+Report 不包含完整 YAML、未知 metadata 或 parser diagnostics。
+API report 保留既有 top-level owner／run metadata 與欄位集合。
+
+| Code | 原因 |
+| --- | --- |
+| `SEARCH_RUN_FILE_NOT_FOUND` | 檔案不存在或路徑中的 parent 不是目錄 |
+| `SEARCH_RUN_FILE_READ_ERROR` | 其他 filesystem 讀取失敗，例如權限不足或讀取目錄 |
+| `SEARCH_RUN_YAML_INVALID` | YAML 語法、重複 key、多份 document、tag 或 alias 展開錯誤 |
+| `SEARCH_RUN_SCHEMA_INVALID` | YAML 可以 parse，但 Search Run 必要結構／欄位無效（空檔亦屬此類） |
+| `SEARCH_RUN_EMPTY` | 合法 Search Run 的影片陣列為空 |
+
+檔案 parse／schema errors 發生在 workflow 啟動前，report 的 `importId` /
+`createdAt` 為 `null`；載入成功後的 selection／create failure 與部分 source failure
+沿用既有 import context、counts、stable error codes 與 exit codes（0 / 1 / 2）。
+
+此 adapter 接受目前實際的 QueryTube export，沒有另創 YAML schema。
+QuerySet YAML 或 API detail 中的 `inputYaml` query 設定不能直接當作 Search Run。
+未來 public SearchRun YAML schema 版本化時，新增／調整此 adapter 的 mapping 與
+validator，維持 normalized `SearchRun` 及共用 application workflow；不將外部
+representation 的 fields 或 version 規則寫入 NotebookLM import core。
+若新的 schema 有 breaking change，會先更新文件、fixtures 與 adapter compatibility
+規則，不會將新格式靜默套用為目前格式。
+
 ## Search Run → NotebookLM application use case（已完成）
 
 `src/application/import-search-run-to-notebook.ts` 提供
 `new ImportSearchRunToNotebook(queryTubeClient, notebookProvider).execute(input)`。
-兩個 dependency 都是既有 application interface；CLI 注入 infrastructure adapters，
-未來 Web UI 可重用同一 use case。
+API 入口保留既有 application interface；CLI 注入 infrastructure adapters，
+未來 Web UI 可重用同一 use case。本機 adapter 回傳 normalized `SearchRun`，
+透過 `executeRun({ notebookTitle, selection? }, run)` 接入同一個 workflow，
+constructor 的 QueryTube client 在這個入口可為 `undefined`。
 
 輸入為 `{ userId, searchRunId, notebookTitle, selection?: { videoIds: readonly string[] } }`，
 三個必要欄位在 fetch 前驗證非空、
 非純空白且不含 NUL；IDs 也不接受 `.` / `..`。無效輸入回報
 `ClientError` 的 `IMPORT_INVALID_ARGUMENTS`。驗證後建立一次 import context，
 將 user title 加上識別 suffix 後傳給 provider。
-目前沒有獨立的 `SearchRun` / `SearchResult` 型別；`getSearchRun()` 回傳
-internal `ImportSource`，其中每筆影片為 `ImportVideo`。
+`getSearchRun()` 回傳帶有 API identity 的 internal `ImportSource`；本機 adapter
+回傳不需要 identity 的 `SearchRun`，兩者都包含 `ImportVideo[]`。
 
 ```text
 QueryTubeClient.getSearchRun(userId, searchRunId)

@@ -1,0 +1,52 @@
+generated_at: '2026-10-05T01:53:44.631Z'
+summary:
+  queries: 2
+  successful: 2
+  failed: 0
+  total_results: 4
+results:
+  - id: query-a
+    query: WoW Forever review
+    count: 2
+    videos:
+      - video_id: xyz
+        title: WoW Forever thoughts
+        channel_id: channel-example-a
+        channel_title: Example channel A
+        published_at: '2026-09-29T09:30:30Z'
+        description: Example review metadata
+        url: https://www.youtube.com/watch?v=xyz
+        thumbnail_url: https://i.ytimg.com/vi/xyz/hqdefault.jpg
+      - video_id: shared
+        title: ''
+        channel_id: channel-example-b
+        channel_title: Example channel B
+        published_at: '2026-09-29T10:30:30Z'
+        description: Appears in two query groups
+        url: https://www.youtube.com/watch?v=shared
+        thumbnail_url: https://i.ytimg.com/vi/shared/hqdefault.jpg
+    relevance_language: zh-Hant
+    region_code: TW
+  - id: query-b
+    query: WoW Forever thoughts
+    count: 2
+    videos:
+      - video_id: shared
+        title: Shared review
+        channel_id: channel-example-b
+        channel_title: Example channel B
+        published_at: '2026-09-29T10:30:30Z'
+        description: Appears in two query groups
+        url: https://www.youtube.com/watch?v=shared
+        thumbnail_url: https://i.ytimg.com/vi/shared/hqdefault.jpg
+      - video_id: abc
+        title: WoW Forever review
+        channel_id: channel-example-c
+        channel_title: Example channel C
+        published_at: '2026-09-30T09:30:30Z'
+        description: Example thoughts metadata
+        url: https://www.youtube.com/watch?v=abc
+        thumbnail_url: https://i.ytimg.com/vi/abc/hqdefault.jpg
+    relevance_language: en
+    region_code: US
+errors: []

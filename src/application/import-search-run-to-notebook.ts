@@ -1,5 +1,5 @@
 import type { Notebook, NotebookSource } from '../domain/notebook.js';
-import type { ImportVideo, SearchRunReference } from '../domain/search-run.js';
+import type { ImportVideo, SearchRun, SearchRunReference } from '../domain/search-run.js';
 import { ClientError } from './errors.js';
 import type { ClientErrorCode } from './errors.js';
 import { createImportContext, generateImportId, ImportSearchRunError } from './import-context.js';
@@ -7,10 +7,12 @@ import type { ImportContextDependencies } from './import-context.js';
 import type { NotebookProvider } from './notebook-provider.js';
 import type { QueryTubeClient } from './querytube-client.js';
 
-export interface ImportSearchRunInput extends SearchRunReference {
+export interface ImportRunOptions {
   readonly notebookTitle: string;
   readonly selection?: { readonly videoIds: readonly string[] };
 }
+
+export interface ImportSearchRunInput extends SearchRunReference, ImportRunOptions {}
 
 /** Temporary workflow observations; the returned source results remain authoritative. */
 export type ImportProgressEvent =
@@ -69,7 +71,7 @@ function validate(input: ImportSearchRunInput): void {
 /** Imports selected sources in internal order, retaining results even when every add fails. */
 export class ImportSearchRunToNotebook {
   constructor(
-    private readonly queryTube: QueryTubeClient,
+    private readonly queryTube: QueryTubeClient | undefined,
     private readonly notebooks: NotebookProvider,
     private readonly contextDependencies: ImportContextDependencies = {
       clock: () => new Date(), generateId: generateImportId,
@@ -78,6 +80,22 @@ export class ImportSearchRunToNotebook {
 
   async execute(input: ImportSearchRunInput, options?: ImportExecutionOptions): Promise<ImportSearchRunResult> {
     validate(input);
+    const client = this.queryTube;
+    if (!client) throw new ClientError('IMPORT_INVALID_ARGUMENTS', 'API import requires a QueryTube client.');
+    return this.executeWithLoader(input, () => client.getSearchRun(input.userId, input.searchRunId), options);
+  }
+
+  /** Accepts a normalized run from any adapter, using the same selection/write workflow. */
+  async executeRun(input: ImportRunOptions, run: SearchRun, options?: ImportExecutionOptions): Promise<ImportSearchRunResult> {
+    if (typeof input.notebookTitle !== 'string' || !input.notebookTitle.trim() || input.notebookTitle.includes('\0')) {
+      throw new ClientError('IMPORT_INVALID_ARGUMENTS', 'Notebook title must be a nonempty string without NUL characters.');
+    }
+    return this.executeWithLoader(input, async () => run, options);
+  }
+
+  private async executeWithLoader(
+    input: ImportRunOptions, load: () => Promise<SearchRun>, options?: ImportExecutionOptions,
+  ): Promise<ImportSearchRunResult> {
     const context = createImportContext(input.notebookTitle, this.contextDependencies);
     try {
       if (input.selection !== undefined && (!input.selection || !Array.isArray(input.selection.videoIds)
@@ -88,7 +106,7 @@ export class ImportSearchRunToNotebook {
       if (selectedIds?.size === 0) {
         throw new ClientError('IMPORT_NO_SELECTED_SOURCES', 'Select at least one source to import.');
       }
-      const run = await this.queryTube.getSearchRun(input.userId, input.searchRunId);
+      const run = await load();
       if (selectedIds) {
         const availableIds = new Set(run.videos.map(source => source.videoId));
         if ([...selectedIds].some(id => !availableIds.has(id))) {

@@ -1,0 +1,14 @@
+generated_at: '2026-10-05T01:53:44.631Z'
+summary:
+  queries: 1
+  successful: 1
+  failed: 0
+  total_results: 1
+results:
+  - id: query-a
+    query: WoW Forever review
+    count: 1
+    videos:
+      - video_id: abc
+        title: Missing URL
+errors: []

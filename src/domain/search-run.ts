@@ -24,6 +24,9 @@ export interface SearchRunSummary extends SearchRunReference {
   readonly createdAt: string;
 }
 
-export interface ImportSource extends SearchRunReference {
+/** Normalized import data; source identity is separate from the shared workflow. */
+export interface SearchRun {
   readonly videos: readonly ImportVideo[];
 }
+
+export interface ImportSource extends SearchRun, SearchRunReference {}

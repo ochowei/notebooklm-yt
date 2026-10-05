@@ -27,7 +27,7 @@ appendFileSync(process.env.NLYT_TEST_LOG, JSON.stringify(args) + '\\n');
 console.error(${JSON.stringify(secret)});
 const create = args[5] === 'create';
 const mode = process.env.NLYT_TEST_BACKEND;
-if ((create && ['auth', 'create'].includes(mode)) || (!create && (mode === 'all' || (mode === 'partial' && args.at(-1).endsWith('=b'))))) {
+if ((create && ['auth', 'create'].includes(mode)) || (!create && (mode === 'all' || (mode === 'partial' && (args.at(-1).endsWith('=b') || args.at(-1).endsWith('=shared')))))) {
   console.log(JSON.stringify({ error: true, code: mode === 'auth' ? 'AUTH_REQUIRED' : 'NETWORK_ERROR', message: ${JSON.stringify(secret)} }));
   process.exitCode = 1;
 } else {
@@ -243,4 +243,178 @@ test('video equals syntax works before command; missing value and search command
     assert.equal(result.status, 1);
     assert.ok(result.stdout.includes('CLI_INVALID_ARGUMENTS'));
   }
+});
+
+const yamlFixture = name => fileURLToPath(new URL(`./fixtures/search-run-${name}.yaml`, import.meta.url));
+const fileArgs = ['import', '--search-run-file', yamlFixture('valid')];
+
+for (const [mode, status, exit] of [['', 'success', 0], ['partial', 'partial_failure', 2], ['all', 'failure', 1]]) {
+  for (const json of [true, false]) {
+    test(`YAML CLI ${status} ${json ? 'JSON' : 'human'} imports offline through existing backend`, t => {
+      const { run, calls } = fixture(t);
+      const result = run([...fileArgs, '--video=shared', '--video=abc', '--video=shared', ...(json ? ['--json'] : [])], {
+        QUERYTUBE_BASE_URL: 'invalid-and-unused', NLYT_TEST_FETCH: 'forbidden', NLYT_TEST_BACKEND: mode,
+      });
+      assert.equal(result.status, exit);
+      assert.equal(result.stderr, '');
+      assert.equal(calls().length, 3);
+      assert.deepEqual(calls().slice(1).map(call => call.at(-1)), ['abc', 'shared'].map(id => `https://www.youtube.com/watch?v=${id}`));
+      assert.ok(calls()[0].at(-1).startsWith('search-run-valid ['));
+      if (json) {
+        const payload = JSON.parse(result.stdout);
+        assert.deepEqual(payload.input, { type: 'yaml-file', path: yamlFixture('valid') });
+        assert.equal(payload.userId, null);
+        assert.equal(payload.searchRunId, null);
+        assert.equal(payload.status, status);
+        assert.equal(payload.sources.total, 3);
+        assert.equal(payload.sources.attempted, 2);
+        assert.equal(payload.sources.skipped, 1);
+        assert.equal(payload.skipped[0].source.videoId, 'xyz');
+        assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
+        assert.ok(payload.notebook.title.endsWith(`[${payload.importId}]`));
+        assert.equal(payload.errors.length, mode === '' ? 0 : mode === 'partial' ? 1 : 2);
+        for (const error of payload.errors) assert.equal(error.code, 'NOTEBOOKLM_BACKEND_ERROR');
+      } else {
+        assert.ok(result.stdout.includes('Input\n- type: yaml-file\n- path: ' + yamlFixture('valid')));
+        assert.ok(result.stdout.includes('- run: (not provided)'));
+        assert.ok(result.stdout.includes('- skipped: not_selected (video: xyz)'));
+        assert.ok(result.stdout.includes('- ' + status.replace('_', ' ')));
+      }
+    });
+  }
+}
+
+test('file path equals syntax before command, .env settings and custom title are supported without API URL', t => {
+  const { cwd, run, calls } = fixture(t);
+  const path = join(cwd, 'local run.yaml');
+  writeFileSync(path, 'userId: local-owner\nunused: omitted-local-metadata\n' + readFileSync(yamlFixture('valid'), 'utf8'));
+  writeFileSync(join(cwd, '.env'), 'NOTEBOOKLM_TIMEOUT_MS=2000\nQUERYTUBE_BASE_URL=unused-invalid\n');
+  const result = run(['--search-run-file=./local run.yaml', '--title=Local 中文', '--json', 'import'], {
+    QUERYTUBE_BASE_URL: undefined, NOTEBOOKLM_TIMEOUT_MS: undefined, NLYT_TEST_FETCH: 'forbidden',
+  });
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.input, { type: 'yaml-file', path: './local run.yaml' });
+  assert.equal(payload.userId, null);
+  assert.equal(payload.searchRunId, null);
+  assert.doesNotMatch(result.stdout + result.stderr, /omitted-local-metadata/);
+  assert.ok(payload.notebook.title.startsWith('Local 中文 ['));
+  assert.equal(calls().length, 4);
+});
+
+for (const [name, code] of [['missing', 'SEARCH_RUN_FILE_NOT_FOUND'], ['broken', 'SEARCH_RUN_YAML_INVALID'],
+  ['invalid', 'SEARCH_RUN_SCHEMA_INVALID'], ['empty', 'SEARCH_RUN_EMPTY']]) {
+  test(`YAML CLI ${code} in both outputs without backend writes or API configuration`, t => {
+    const { run, calls } = fixture(t);
+    for (const json of [true, false]) {
+      const result = run(['import', '--search-run-file', yamlFixture(name), ...(json ? ['--json'] : [])], {
+        QUERYTUBE_BASE_URL: '', NLYT_TEST_FETCH: 'forbidden', NOTEBOOKLM_CLI_PATH: '/nonexistent/backend',
+      });
+      assert.equal(result.status, 1);
+      assert.deepEqual(calls(), []);
+      if (json) {
+        assert.equal(result.stderr, '');
+        const payload = JSON.parse(result.stdout);
+        assert.deepEqual(payload.input, { type: 'yaml-file', path: yamlFixture(name) });
+        assert.deepEqual(payload.errors, [{ code }]);
+        assert.equal(payload.notebook.created, false);
+        assert.equal(payload.importId, null);
+      } else {
+        assert.equal(result.stdout, '');
+        assert.ok(result.stderr.includes(code));
+      }
+    }
+  });
+}
+
+test('file source conflicts and invalid file commands fail deterministically before adapters', t => {
+  const { run, calls } = fixture(t);
+  for (const command of [[...fileArgs, '--user=owner'], [...args, '--search-run-file', yamlFixture('valid')],
+    [...fileArgs, 'search-run', 'run-1'], [...fileArgs, 'extra'], [...fileArgs, '--title='],
+    ['import', '--search-run-file='], ['import', '--search-run-file'],
+    ['import', '--search-run-file', yamlFixture('valid'), '--user-id=owner'],
+    ['import', '--search-run-file', yamlFixture('valid'), '--search-run-id=run'],
+    [...fileArgs, '--querytube-base-url=https://example.test'],
+    ['search-runs', 'list', '--user=owner', '--search-run-file', yamlFixture('valid')],
+  ]) {
+    const result = run([...command, '--json'], { QUERYTUBE_BASE_URL: '', NLYT_TEST_FETCH: 'forbidden' });
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.errors?.[0].code ?? payload.error.code, 'CLI_INVALID_ARGUMENTS');
+  }
+  assert.deepEqual(calls(), []);
+});
+
+test('file selection rejects unknown video before backend writes', t => {
+  const { run, calls } = fixture(t);
+  const result = run([...fileArgs, '--video=unknown', '--json'], { QUERYTUBE_BASE_URL: '', NLYT_TEST_FETCH: 'forbidden' });
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.errors, [{ code: 'IMPORT_INVALID_SELECTION' }]);
+  assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
+  assert.deepEqual(calls(), []);
+});
+
+test('file create failure preserves import context, source and requested title', t => {
+  const { run, calls } = fixture(t);
+  const result = run([...fileArgs, '--title=Test', '--json'], {
+    QUERYTUBE_BASE_URL: '', NLYT_TEST_FETCH: 'forbidden', NLYT_TEST_BACKEND: 'create',
+  });
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.input.type, 'yaml-file');
+  assert.deepEqual(payload.errors, [{ code: 'NOTEBOOKLM_BACKEND_ERROR' }]);
+  assert.match(payload.importId, /^NLYT-[A-Z0-9]{6}$/);
+  assert.equal(payload.notebook.title, calls()[0].at(-1));
+  assert.equal(payload.notebook.created, false);
+  assert.equal(calls().length, 1);
+});
+
+test('help documents file input without configuration or backend', t => {
+  const { run, calls } = fixture(t);
+  const result = run(['import', '--help'], { QUERYTUBE_BASE_URL: '', NOTEBOOKLM_CLI_PATH: '/nonexistent/backend' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--search-run-file/);
+  assert.match(result.stdout, /Without --title, file import uses the filename stem/);
+  assert.deepEqual(calls(), []);
+});
+
+test('export with no API IDs uses the filename stem as its default title and keeps report IDs null', t => {
+  const { cwd, run, calls } = fixture(t);
+  writeFileSync(join(cwd, 'youtube-search-results-v3-merged.yml'), readFileSync(yamlFixture('valid')));
+  const result = run(['import', '--search-run-file=./youtube-search-results-v3-merged.yml', '--json'], {
+    QUERYTUBE_BASE_URL: '', NLYT_TEST_FETCH: 'forbidden',
+  });
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.userId, null);
+  assert.equal(payload.searchRunId, null);
+  assert.deepEqual(payload.input, { type: 'yaml-file', path: './youtube-search-results-v3-merged.yml' });
+  assert.ok(payload.notebook.title.startsWith('youtube-search-results-v3-merged ['));
+  assert.ok(payload.notebook.title.endsWith(`[${payload.importId}]`));
+  assert.deepEqual(payload.sources, { total: 3, selected: 3, attempted: 3, succeeded: 3, failed: 0, skipped: 0 });
+  assert.equal(calls().length, 4, 'cross-query duplicate is only added once');
+  assert.deepEqual(calls().slice(1).map(call => call.at(-1)),
+    ['abc', 'shared', 'xyz'].map(id => `https://www.youtube.com/watch?v=${id}`));
+});
+
+test('filesystem read failure in file mode is stable in human and JSON reports', t => {
+  const { cwd, run, calls } = fixture(t);
+  for (const json of [true, false]) {
+    const result = run(['import', '--search-run-file', cwd, ...(json ? ['--json'] : [])], {
+      QUERYTUBE_BASE_URL: '', NLYT_TEST_FETCH: 'forbidden', NOTEBOOKLM_CLI_PATH: '/nonexistent/backend',
+    });
+    assert.equal(result.status, 1);
+    if (json) {
+      const payload = JSON.parse(result.stdout);
+      assert.deepEqual(payload.errors, [{ code: 'SEARCH_RUN_FILE_READ_ERROR' }]);
+      assert.equal(payload.notebook.created, false);
+      assert.equal(payload.searchRunId, null);
+      assert.equal(result.stderr, '');
+    } else {
+      assert.equal(result.stdout, '');
+      assert.ok(result.stderr.includes('SEARCH_RUN_FILE_READ_ERROR'));
+    }
+  }
+  assert.deepEqual(calls(), []);
 });

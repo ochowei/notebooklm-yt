@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { detail } from './fixtures.mjs';
 
 globalThis.fetch = async (url, options) => {
+  if (process.env.NLYT_TEST_FETCH === 'forbidden') {
+    process.stderr.write('UNEXPECTED_QUERYTUBE_FETCH');
+    throw new Error('File import must not fetch');
+  }
   assert.equal(options.method, 'GET');
   assert.equal(new URL(url).pathname, '/api/v1/public/users/user-1/search-runs/run-1');
   if (process.env.NLYT_TEST_FETCH === '404') return new Response('secret token', { status: 404 });

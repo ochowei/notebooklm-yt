@@ -3,12 +3,16 @@ import { ClientError } from '../application/errors.js';
 import { summarizeImportSources } from '../application/import-search-run-to-notebook.js';
 import type { ImportSearchRunInput, ImportSearchRunResult } from '../application/import-search-run-to-notebook.js';
 
+export type ImportInputSource = { readonly type: 'yaml-file'; readonly path: string };
+export type ImportReportInput = Partial<ImportSearchRunInput> & { readonly input?: ImportInputSource };
+
 /** Presentation contract only; application results remain authoritative. */
-export function importReport(input: Partial<ImportSearchRunInput>, result?: ImportSearchRunResult, error?: unknown) {
+export function importReport(input: ImportReportInput, result?: ImportSearchRunResult, error?: unknown) {
   const context = error instanceof ImportSearchRunError ? error.context : undefined;
   const { status, summary } = summarizeImportSources(result?.sources ?? []);
   return {
     status,
+    ...(input.input ? { input: input.input } : {}),
     importId: result?.importId ?? context?.importId ?? null,
     createdAt: result?.createdAt ?? context?.createdAt ?? null,
     userId: input.userId ?? null,
@@ -31,6 +35,7 @@ export function importExitCode(report: ReturnType<typeof importReport>): number 
 export function importHumanOutput(report: ReturnType<typeof importReport>): string {
   return [
     'Import', `- id: ${report.importId ?? '(not started)'}`, `- created: ${report.createdAt ?? '(not started)'}`,
+    ...(report.input ? ['', 'Input', `- type: ${report.input.type}`, `- path: ${report.input.path}`] : []),
     '', 'Search Run', `- user: ${report.userId ?? '(not provided)'}`, `- run: ${report.searchRunId ?? '(not provided)'}`,
     '', 'Notebook', `- title: ${report.notebook.title ?? '(not provided)'}`,
     `- created: ${report.notebook.created ? 'yes' : 'no (not confirmed)'}`,
